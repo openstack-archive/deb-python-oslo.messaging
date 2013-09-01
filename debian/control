@@ -41,4 +41,4 @@ Description: oslo messaging library
  The oslo.messaging API supports RPC and notifications over a number of
  different messaging transports.
  .
- Oslo is a set of libraries developped for OpenStack.
+ Oslo is a set of libraries developed for OpenStack.
