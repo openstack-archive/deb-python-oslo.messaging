@@ -1,0 +1,5 @@
+oslo.messaging (1.2.0~a11-1) unstable; urgency=low
+
+  * Initial release (Closes: #721511).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 01 Sep 2013 21:27:09 +0800

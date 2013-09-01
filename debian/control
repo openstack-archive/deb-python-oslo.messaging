@@ -1,0 +1,44 @@
+Source: oslo.messaging
+Section: python
+Priority: optional
+Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
+Uploaders: Thomas Goirand <zigo@debian.org>
+Build-Depends: debhelper (>= 9),
+               python-all (>= 2.6.6-3~),
+               python-d2to1,
+               python-pbr,
+               python-setuptools
+Build-Depends-Indep: python-eventlet,
+                     python-fixtures,
+                     python-iso8601,
+                     python-kombu,
+                     python-mox,
+                     python-oslo.config,
+                     python-oslo.sphinx,
+                     python-six,
+                     python-sphinx,
+                     python-stevedore,
+                     python-testscenarios,
+                     python-testtools,
+                     testrepository (>= 0.0.17)
+Standards-Version: 3.9.4
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/oslo.messaging.git
+Vcs-Git: git://anonscm.debian.org/openstack/oslo.messaging.git
+Homepage: https://github.com/openstack/oslo.messaging
+
+Package: python-oslo.messaging
+Architecture: all
+Pre-Depends: dpkg (>= 1.15.6~)
+Depends: python-eventlet,
+         python-fixtures,
+         python-iso8601,
+         python-oslo.config,
+         python-six,
+         python-stevedore,
+         ${misc:Depends},
+         ${python:Depends}
+Description: oslo messaging library
+ The oslo.messaging API supports RPC and notifications over a number of
+ different messaging transports.
+ .
+ Oslo is a set of libraries developped for OpenStack.

@@ -1,0 +1,3 @@
+version=3
+opts="uversionmangle=s/\.([a-zA-Z])/~$1/;s/%7E/~/" \
+ https://github.com/openstack/oslo.messaging/tags .*/(\d[\d\.]+)\.tar\.gz

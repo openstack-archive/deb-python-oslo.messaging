@@ -1,0 +1,38 @@
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: oslo.messaging
+Source: git://github.com/openstack/oslo.messaging.git
+
+Files: debian/*
+Copyright: (c) 2013, Thomas Goirand <zigo@debian.org>
+License: Apache-2
+
+Files: *
+Copyright: (c) 2011-2012 OpenStack Foundation.
+           (c) 2012 Red Hat, Inc
+           (c) 2013 Hewlett-Packard Development Company, L.P.
+           (c) 2012 Intel Corporation
+           (c) 2012-2013, Mark McLoughlin <markmc@redhat.com>
+           (c) 2012-2013, Flaper Fesp <flaper87@gmail.com>
+           (c) 2012-2013, Doug Hellmann <doug.hellmann@dreamhost.com>
+           (c) 2012-2013, Zhongyue Luo <zhongyue.nah@intel.com>
+           (c) 2012-2013, Sergey Lukjanov <slukjanov@mirantis.com>
+           (c) 2012-2013, Russell Bryant <rbryant@redhat.com>
+           (c) 2012-2013, Davanum Srinivas <dims@linux.vnet.ibm.com>
+           (c) 2012-2013, Andreas Jaeger <aj@suse.de>
+License: Apache-2
+
+License: Apache-2
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+ .
+    http://www.apache.org/licenses/LICENSE-2.0
+ .
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+ .
+ On Debian-based systems the full text of the Apache version 2.0 license
+ can be found in "/usr/share/common-licenses/Apache-2.0".
