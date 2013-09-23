@@ -1,3 +1,9 @@
+oslo.messaging (1.2.0~a11-2) unstable; urgency=low
+
+  * Added missing build-depends: openstack-pkg-tools (Closes: #724090).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 23 Sep 2013 10:03:12 +0800
+
 oslo.messaging (1.2.0~a11-1) unstable; urgency=low
 
   * Initial release (Closes: #721511).
