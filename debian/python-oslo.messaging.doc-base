@@ -1,0 +1,9 @@
+Document: python-oslo.messaging
+Title: python-oslo.messaging Documentation
+Author: OpenStack
+Abstract: Sphinx documentation for python-oslo.messaging
+Section: Network/File Transfer
+
+Format: HTML
+Index: /usr/share/doc/python-oslo.messaging/html/index.html
+Files: /usr/share/doc/python-oslo.messaging/html/*
