@@ -23,15 +23,10 @@ __all__ = [
     'ServerListenError',
 ]
 
-import logging
-
 from stevedore import driver
 
 from oslo.messaging._drivers import base as driver_base
 from oslo.messaging import exceptions
-
-
-_LOG = logging.getLogger(__name__)
 
 
 class MessagingServerError(exceptions.MessagingException):
@@ -116,7 +111,7 @@ class MessageHandlingServer(object):
         registering a callback with an event loop. Similarly, the executor may
         choose to dispatch messages in a new thread, coroutine or simply the
         current thread. An RPCServer subclass is available for each I/O
-        strategy supported by the library, so choose the subclass appropraite
+        strategy supported by the library, so choose the subclass appropriate
         for your program.
         """
         if self._executor is not None:

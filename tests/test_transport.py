@@ -13,11 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import itertools
-
 import fixtures
-import mox
+from mox3 import mox
 from oslo.config import cfg
+import six
 from stevedore import driver
 import testscenarios
 
@@ -54,39 +53,63 @@ class GetTransportTestCase(test_utils.BaseTestCase):
     scenarios = [
         ('rpc_backend',
          dict(url=None, transport_url=None, rpc_backend='testbackend',
-              control_exchange=None, allowed=None,
+              control_exchange=None, allowed=None, aliases=None,
               expect=dict(backend='testbackend',
                           exchange=None,
                           url='testbackend:',
                           allowed=[]))),
         ('transport_url',
          dict(url=None, transport_url='testtransport:', rpc_backend=None,
-              control_exchange=None, allowed=None,
+              control_exchange=None, allowed=None, aliases=None,
               expect=dict(backend='testtransport',
                           exchange=None,
                           url='testtransport:',
                           allowed=[]))),
         ('url_param',
          dict(url='testtransport:', transport_url=None, rpc_backend=None,
-              control_exchange=None, allowed=None,
+              control_exchange=None, allowed=None, aliases=None,
               expect=dict(backend='testtransport',
                           exchange=None,
                           url='testtransport:',
                           allowed=[]))),
         ('control_exchange',
          dict(url=None, transport_url=None, rpc_backend='testbackend',
-              control_exchange='testexchange', allowed=None,
+              control_exchange='testexchange', allowed=None, aliases=None,
               expect=dict(backend='testbackend',
                           exchange='testexchange',
                           url='testbackend:',
                           allowed=[]))),
         ('allowed_remote_exmods',
          dict(url=None, transport_url=None, rpc_backend='testbackend',
-              control_exchange=None, allowed=['foo', 'bar'],
+              control_exchange=None, allowed=['foo', 'bar'], aliases=None,
               expect=dict(backend='testbackend',
                           exchange=None,
                           url='testbackend:',
                           allowed=['foo', 'bar']))),
+        ('rpc_backend_aliased',
+         dict(url=None, transport_url=None, rpc_backend='testfoo',
+              control_exchange=None, allowed=None,
+              aliases=dict(testfoo='testbackend'),
+              expect=dict(backend='testbackend',
+                          exchange=None,
+                          url='testbackend:',
+                          allowed=[]))),
+        ('transport_url_aliased',
+         dict(url=None, transport_url='testfoo:', rpc_backend=None,
+              control_exchange=None, allowed=None,
+              aliases=dict(testfoo='testtransport'),
+              expect=dict(backend='testtransport',
+                          exchange=None,
+                          url='testtransport:',
+                          allowed=[]))),
+        ('url_param_aliased',
+         dict(url='testfoo:', transport_url=None, rpc_backend=None,
+              control_exchange=None, allowed=None,
+              aliases=dict(testfoo='testtransport'),
+              expect=dict(backend='testtransport',
+                          exchange=None,
+                          url='testtransport:',
+                          allowed=[]))),
     ]
 
     def setUp(self):
@@ -119,6 +142,8 @@ class GetTransportTestCase(test_utils.BaseTestCase):
         kwargs = dict(url=self.url)
         if self.allowed is not None:
             kwargs['allowed_remote_exmods'] = self.allowed
+        if self.aliases is not None:
+            kwargs['aliases'] = self.aliases
         transport = messaging.get_transport(self.conf, **kwargs)
 
         self.assertIsNotNone(transport)
@@ -181,8 +206,7 @@ class GetTransportSadPathTestCase(test_utils.BaseTestCase):
 
             self.assertIsInstance(ex, messaging.MessagingException)
             self.assertIsInstance(ex, ex_cls)
-            self.assertTrue(hasattr(ex, 'msg'))
-            self.assertIn(ex_msg_contains, ex.msg)
+            self.assertIn(ex_msg_contains, six.text_type(ex))
 
             for k, v in self.ex.items():
                 self.assertTrue(hasattr(ex, k))
@@ -205,7 +229,7 @@ class _SetDefaultsFixture(fixtures.Fixture):
         def first(seq, default=None, key=None):
             if key is None:
                 key = bool
-            return next(itertools.ifilter(key, seq), default)
+            return next(six.moves.filter(key, seq), default)
 
         def default(opts, name):
             return first(opts, key=lambda o: o.name == name).default
@@ -275,8 +299,8 @@ class TestTransportMethodArgs(test_utils.BaseTestCase):
     def test_send_notification(self):
         t = transport.Transport(_FakeDriver(cfg.CONF))
 
-        self.mox.StubOutWithMock(t._driver, 'send')
-        t._driver.send(self._target, 'ctxt', 'message', 1.0)
+        self.mox.StubOutWithMock(t._driver, 'send_notification')
+        t._driver.send_notification(self._target, 'ctxt', 'message', 1.0)
         self.mox.ReplayAll()
 
         t._send_notification(self._target, 'ctxt', 'message', version=1.0)

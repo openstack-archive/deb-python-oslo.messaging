@@ -23,15 +23,13 @@ __all__ = [
     'UnsupportedVersion',
 ]
 
-import logging
+import six
 
 from oslo.messaging import _utils as utils
 from oslo.messaging import localcontext
 from oslo.messaging import serializer as msg_serializer
 from oslo.messaging import server as msg_server
 from oslo.messaging import target
-
-_LOG = logging.getLogger(__name__)
 
 
 class RPCDispatcherError(msg_server.MessagingServerError):
@@ -89,7 +87,7 @@ class RPCDispatcher(object):
     def _dispatch(self, endpoint, method, ctxt, args):
         ctxt = self.serializer.deserialize_context(ctxt)
         new_args = dict()
-        for argname, arg in args.iteritems():
+        for argname, arg in six.iteritems(args):
             new_args[argname] = self.serializer.deserialize_entity(ctxt, arg)
         result = getattr(endpoint, method)(ctxt, **new_args)
         return self.serializer.serialize_entity(ctxt, result)

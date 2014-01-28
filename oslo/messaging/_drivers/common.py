@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -33,8 +31,9 @@ from oslo.messaging.openstack.common import jsonutils
 # FIXME(markmc): remove this
 _ = lambda s: s
 
-CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
+
+_EXCEPTIONS_MODULE = 'exceptions' if six.PY2 else 'builtins'
 
 
 '''RPC Envelope Version.
@@ -79,7 +78,7 @@ _exception_opts = [
                 default=['oslo.messaging.exceptions',
                          'nova.exception',
                          'cinder.exception',
-                         'exceptions',
+                         _EXCEPTIONS_MODULE,
                          ],
                 help='Modules of exceptions that are permitted to be recreated'
                      'upon receiving exception data from an rpc call.'),
@@ -100,7 +99,7 @@ class RPCException(Exception):
                 # kwargs doesn't match a variable in the message
                 # log the issue and the kwargs
                 LOG.exception(_('Exception in string format operation'))
-                for name, value in kwargs.iteritems():
+                for name, value in six.iteritems(kwargs):
                     LOG.error("%s: %s" % (name, value))
                 # at least get the core message out if something happened
                 message = self.msg_fmt
@@ -278,7 +277,7 @@ def _safe_log(log_func, msg, msg_data):
 
     def _fix_passwords(d):
         """Sanitizes the password fields in the dictionary."""
-        for k in d.iterkeys():
+        for k in six.iterkeys(d):
             if k.lower().find('password') != -1:
                 d[k] = '<SANITIZED>'
             elif k.lower() in SANITIZE:
@@ -340,7 +339,7 @@ def deserialize_remote_exception(data, allowed_remote_exmods):
 
     # NOTE(ameade): We DO NOT want to allow just any module to be imported, in
     # order to prevent arbitrary code execution.
-    if module != 'exceptions' and module not in allowed_remote_exmods:
+    if module != _EXCEPTIONS_MODULE and module not in allowed_remote_exmods:
         return messaging.RemoteError(name, failure.get('message'), trace)
 
     try:
@@ -361,7 +360,7 @@ def deserialize_remote_exception(data, allowed_remote_exmods):
     try:
         # NOTE(ameade): Dynamically create a new exception type and swap it in
         # as the new type for the exception. This only works on user defined
-        # Exceptions and not core python exceptions. This is important because
+        # Exceptions and not core Python exceptions. This is important because
         # we cannot necessarily change an exception message so we must override
         # the __str__ method.
         failure.__class__ = new_ex_type

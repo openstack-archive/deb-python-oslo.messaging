@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2011 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -29,6 +27,7 @@ import kombu.connection
 import kombu.entity
 import kombu.messaging
 from oslo.config import cfg
+import six
 
 from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
@@ -136,7 +135,6 @@ class ConsumerBase(object):
         self.tag = str(tag)
         self.kwargs = kwargs
         self.queue = None
-        self.ack_on_error = kwargs.get('ack_on_error', True)
         self.reconnect(channel)
 
     def reconnect(self, channel):
@@ -149,32 +147,16 @@ class ConsumerBase(object):
     def _callback_handler(self, message, callback):
         """Call callback with deserialized message.
 
-        Messages that are processed without exception are ack'ed.
-
-        If the message processing generates an exception, it will be
-        ack'ed if ack_on_error=True. Otherwise it will be .reject()'ed.
-        Rejection is better than waiting for the message to timeout.
-        Rejected messages are immediately requeued.
+        Messages that are processed and ack'ed.
         """
 
-        ack_msg = False
         try:
             msg = rpc_common.deserialize_msg(message.payload)
             callback(msg)
-            ack_msg = True
         except Exception:
-            if self.ack_on_error:
-                ack_msg = True
-                LOG.exception(_("Failed to process message"
-                                " ... skipping it."))
-            else:
-                LOG.exception(_("Failed to process message"
-                                " ... will requeue."))
-        finally:
-            if ack_msg:
-                message.ack()
-            else:
-                message.reject()
+            LOG.exception(_("Failed to process message"
+                            " ... skipping it."))
+        message.ack()
 
     def consume(self, *args, **kwargs):
         """Actually declare the consumer on the amqp channel.  This will
@@ -349,7 +331,7 @@ class Publisher(object):
 class DirectPublisher(Publisher):
     """Publisher class for 'direct'."""
     def __init__(self, conf, channel, msg_id, **kwargs):
-        """init a 'direct' publisher.
+        """Init a 'direct' publisher.
 
         Kombu options may be passed as keyword args to override defaults
         """
@@ -365,7 +347,7 @@ class DirectPublisher(Publisher):
 class TopicPublisher(Publisher):
     """Publisher class for 'topic'."""
     def __init__(self, conf, channel, topic, **kwargs):
-        """init a 'topic' publisher.
+        """Init a 'topic' publisher.
 
         Kombu options may be passed as keyword args to override defaults
         """
@@ -384,7 +366,7 @@ class TopicPublisher(Publisher):
 class FanoutPublisher(Publisher):
     """Publisher class for 'fanout'."""
     def __init__(self, conf, channel, topic, **kwargs):
-        """init a 'fanout' publisher.
+        """Init a 'fanout' publisher.
 
         Kombu options may be passed as keyword args to override defaults
         """
@@ -458,7 +440,7 @@ class Connection(object):
                 'virtual_host': self.conf.rabbit_virtual_host,
             }
 
-            for sp_key, value in server_params.iteritems():
+            for sp_key, value in six.iteritems(server_params):
                 p_key = server_params_to_kombu_params.get(sp_key, sp_key)
                 params[p_key] = value
 
@@ -497,12 +479,8 @@ class Connection(object):
             # future with this?
             ssl_params['cert_reqs'] = ssl.CERT_REQUIRED
 
-        if not ssl_params:
-            # Just have the default behavior
-            return True
-        else:
-            # Return the extended behavior
-            return ssl_params
+        # Return the extended behavior or just have the default behavior
+        return ssl_params or True
 
     def _connect(self, params):
         """Connect to rabbit.  Re-establish any queues that may have
@@ -552,7 +530,9 @@ class Connection(object):
             try:
                 self._connect(params)
                 return
-            except (IOError, self.connection_errors) as e:
+            except IOError:
+                pass
+            except self.connection_errors:
                 pass
             except Exception as e:
                 # NOTE(comstud): Unfortunately it's possible for amqplib
@@ -593,7 +573,10 @@ class Connection(object):
         while True:
             try:
                 return method(*args, **kwargs)
-            except (self.connection_errors, socket.timeout, IOError) as e:
+            except self.connection_errors as e:
+                if error_callback:
+                    error_callback(e)
+            except (socket.timeout, IOError) as e:
                 if error_callback:
                     error_callback(e)
             except Exception as e:
@@ -643,7 +626,7 @@ class Connection(object):
 
         def _declare_consumer():
             consumer = consumer_cls(self.conf, self.channel, topic, callback,
-                                    self.consumer_num.next())
+                                    six.next(self.consumer_num))
             self.consumers.append(consumer)
             return consumer
 
@@ -714,12 +697,11 @@ class Connection(object):
         self.declare_consumer(DirectConsumer, topic, callback)
 
     def declare_topic_consumer(self, topic, callback=None, queue_name=None,
-                               exchange_name=None, ack_on_error=True):
+                               exchange_name=None):
         """Create a 'topic' consumer."""
         self.declare_consumer(functools.partial(TopicConsumer,
                                                 name=queue_name,
                                                 exchange_name=exchange_name,
-                                                ack_on_error=ack_on_error,
                                                 ),
                               topic, callback)
 
@@ -748,7 +730,7 @@ class Connection(object):
         it = self.iterconsume(limit=limit, timeout=timeout)
         while True:
             try:
-                it.next()
+                six.next(it)
             except StopIteration:
                 return
 
@@ -763,112 +745,6 @@ class Connection(object):
         if self.consumer_thread is None:
             self.consumer_thread = eventlet.spawn(_consumer_thread)
         return self.consumer_thread
-
-    def create_consumer(self, topic, proxy, fanout=False):
-        """Create a consumer that calls a method in a proxy object."""
-        proxy_cb = rpc_amqp.ProxyCallback(
-            self.conf, proxy,
-            rpc_amqp.get_connection_pool(self.conf, Connection))
-        self.proxy_callbacks.append(proxy_cb)
-
-        if fanout:
-            self.declare_fanout_consumer(topic, proxy_cb)
-        else:
-            self.declare_topic_consumer(topic, proxy_cb)
-
-    def create_worker(self, topic, proxy, pool_name):
-        """Create a worker that calls a method in a proxy object."""
-        proxy_cb = rpc_amqp.ProxyCallback(
-            self.conf, proxy,
-            rpc_amqp.get_connection_pool(self.conf, Connection))
-        self.proxy_callbacks.append(proxy_cb)
-        self.declare_topic_consumer(topic, proxy_cb, pool_name)
-
-    def join_consumer_pool(self, callback, pool_name, topic,
-                           exchange_name=None, ack_on_error=True):
-        """Register as a member of a group of consumers for a given topic from
-        the specified exchange.
-
-        Exactly one member of a given pool will receive each message.
-
-        A message will be delivered to multiple pools, if more than
-        one is created.
-        """
-        callback_wrapper = rpc_amqp.CallbackWrapper(
-            conf=self.conf,
-            callback=callback,
-            connection_pool=rpc_amqp.get_connection_pool(self.conf,
-                                                         Connection),
-        )
-        self.proxy_callbacks.append(callback_wrapper)
-        self.declare_topic_consumer(
-            queue_name=pool_name,
-            topic=topic,
-            exchange_name=exchange_name,
-            callback=callback_wrapper,
-            ack_on_error=ack_on_error,
-        )
-
-
-def create_connection(conf, new=True):
-    """Create a connection."""
-    return rpc_amqp.create_connection(
-        conf, new,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def multicall(conf, context, topic, msg, timeout=None):
-    """Make a call that returns multiple times."""
-    return rpc_amqp.multicall(
-        conf, context, topic, msg, timeout,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def call(conf, context, topic, msg, timeout=None):
-    """Sends a message on a topic and wait for a response."""
-    return rpc_amqp.call(
-        conf, context, topic, msg, timeout,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def cast(conf, context, topic, msg):
-    """Sends a message on a topic without waiting for a response."""
-    return rpc_amqp.cast(
-        conf, context, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def fanout_cast(conf, context, topic, msg):
-    """Sends a message on a fanout exchange without waiting for a response."""
-    return rpc_amqp.fanout_cast(
-        conf, context, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def cast_to_server(conf, context, server_params, topic, msg):
-    """Sends a message on a topic to a specific server."""
-    return rpc_amqp.cast_to_server(
-        conf, context, server_params, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def fanout_cast_to_server(conf, context, server_params, topic, msg):
-    """Sends a message on a fanout exchange to a specific server."""
-    return rpc_amqp.fanout_cast_to_server(
-        conf, context, server_params, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def notify(conf, context, topic, msg, envelope):
-    """Sends a notification event on a topic."""
-    return rpc_amqp.notify(
-        conf, context, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection),
-        envelope)
-
-
-def cleanup():
-    return rpc_amqp.cleanup(Connection.pool)
 
 
 class RabbitDriver(amqpdriver.AMQPDriverBase):

@@ -17,12 +17,13 @@
 
 import abc
 import logging
+import uuid
 
 from oslo.config import cfg
+import six
 from stevedore import named
 
 from oslo.messaging.openstack.common import timeutils
-from oslo.messaging.openstack.common import uuidutils
 from oslo.messaging import serializer as msg_serializer
 
 _notifier_opts = [
@@ -39,9 +40,8 @@ _notifier_opts = [
 _LOG = logging.getLogger(__name__)
 
 
+@six.add_metaclass(abc.ABCMeta)
 class _Driver(object):
-
-    __metaclass__ = abc.ABCMeta
 
     def __init__(self, conf, topics, transport):
         self.conf = conf
@@ -110,24 +110,23 @@ class Notifier(object):
         :param serializer: an optional entity serializer
         :type serializer: Serializer
         """
-        self.conf = transport.conf
-        self.conf.register_opts(_notifier_opts)
+        transport.conf.register_opts(_notifier_opts)
 
         self.transport = transport
         self.publisher_id = publisher_id
 
         self._driver_names = ([driver] if driver is not None
-                              else self.conf.notification_driver)
+                              else transport.conf.notification_driver)
 
         self._topics = ([topic] if topic is not None
-                        else self.conf.notification_topics)
+                        else transport.conf.notification_topics)
         self._serializer = serializer or msg_serializer.NoOpSerializer()
 
         self._driver_mgr = named.NamedExtensionManager(
             'oslo.messaging.notify.drivers',
             names=self._driver_names,
             invoke_on_load=True,
-            invoke_args=[self.conf],
+            invoke_args=[transport.conf],
             invoke_kwds={
                 'topics': self._topics,
                 'transport': self.transport,
@@ -152,7 +151,7 @@ class Notifier(object):
         payload = self._serializer.serialize_entity(ctxt, payload)
         ctxt = self._serializer.serialize_context(ctxt)
 
-        msg = dict(message_id=uuidutils.generate_uuid(),
+        msg = dict(message_id=str(uuid.uuid4()),
                    publisher_id=publisher_id or self.publisher_id,
                    event_type=event_type,
                    priority=priority,
@@ -169,6 +168,18 @@ class Notifier(object):
 
         if self._driver_mgr.extensions:
             self._driver_mgr.map(do_notify)
+
+    def audit(self, ctxt, event_type, payload):
+        """Send a notification at audit level.
+
+        :param ctxt: a request context dict
+        :type ctxt: dict
+        :param event_type: describes the event, e.g. 'compute.create_instance'
+        :type event_type: str
+        :param payload: the notification payload
+        :type payload: dict
+        """
+        self._notify(ctxt, event_type, payload, 'AUDIT')
 
     def debug(self, ctxt, event_type, payload):
         """Send a notification at debug level.
@@ -206,6 +217,8 @@ class Notifier(object):
         """
         self._notify(ctxt, event_type, payload, 'WARN')
 
+    warning = warn
+
     def error(self, ctxt, event_type, payload):
         """Send a notification at error level.
 
@@ -230,6 +243,24 @@ class Notifier(object):
         """
         self._notify(ctxt, event_type, payload, 'CRITICAL')
 
+    def sample(self, ctxt, event_type, payload):
+        """Send a notification at sample level.
+
+        Sample notifications are for high-frequency events
+        that typically contain small payloads. eg: "CPU = 70%"
+
+        Not all drivers support the sample level
+        (log, for example) so these could be dropped.
+
+        :param ctxt: a request context dict
+        :type ctxt: dict
+        :param event_type: describes the event, e.g. 'compute.create_instance'
+        :type event_type: str
+        :param payload: the notification payload
+        :type payload: dict
+        """
+        self._notify(ctxt, event_type, payload, 'SAMPLE')
+
 
 class _SubNotifier(Notifier):
 
@@ -237,7 +268,6 @@ class _SubNotifier(Notifier):
 
     def __init__(self, base, publisher_id):
         self._base = base
-        self.conf = base.conf
         self.transport = base.transport
         self.publisher_id = publisher_id
 

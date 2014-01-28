@@ -16,9 +16,10 @@
 __all__ = ['AMQPDriverBase']
 
 import logging
-import Queue
 import threading
 import uuid
+
+from six import moves
 
 from oslo import messaging
 from oslo.messaging._drivers import amqp as rpc_amqp
@@ -50,7 +51,7 @@ class AMQPIncomingMessage(base.IncomingMessage):
 
         # If a reply_q exists, add the msg_id to the reply and pass the
         # reply_q to direct_send() to use it as the response queue.
-        # Otherwise use the msg_id for backward compatibilty.
+        # Otherwise use the msg_id for backward compatibility.
         if self.reply_q:
             msg['_msg_id'] = self.msg_id
             conn.direct_send(self.reply_q, rpc_common.serialize_msg(msg))
@@ -97,19 +98,19 @@ class ReplyWaiters(object):
 
     def __init__(self):
         self._queues = {}
-        self._wrn_threshhold = 10
+        self._wrn_threshold = 10
 
     def get(self, msg_id, timeout):
         try:
             return self._queues[msg_id].get(block=True, timeout=timeout)
-        except Queue.Empty:
+        except moves.queue.Empty:
             raise messaging.MessagingTimeout('Timed out waiting for a reply '
                                              'to message ID %s' % msg_id)
 
     def check(self, msg_id):
         try:
             return self._queues[msg_id].get(block=False)
-        except Queue.Empty:
+        except moves.queue.Empty:
             return None
 
     def put(self, msg_id, message_data):
@@ -129,11 +130,11 @@ class ReplyWaiters(object):
 
     def add(self, msg_id, queue):
         self._queues[msg_id] = queue
-        if len(self._queues) > self._wrn_threshhold:
+        if len(self._queues) > self._wrn_threshold:
             LOG.warn('Number of call queues is greater than warning '
-                     'threshhold: %d. There could be a leak.' %
-                     self._wrn_threshhold)
-            self._wrn_threshhold *= 2
+                     'threshold: %d. There could be a leak.' %
+                     self._wrn_threshold)
+            self._wrn_threshold *= 2
 
     def remove(self, msg_id):
         del self._queues[msg_id]
@@ -158,7 +159,7 @@ class ReplyWaiter(object):
         self.incoming.append(message)
 
     def listen(self, msg_id):
-        queue = Queue.Queue()
+        queue = moves.queue.Queue()
         self.waiters.add(msg_id, queue)
 
     def unlisten(self, msg_id):
@@ -291,29 +292,34 @@ class AMQPDriverBase(base.BaseDriver):
         self._waiter = None
 
     def _server_params_from_url(self, url):
-        if not url.hosts:
-            return None
+        sp = {}
 
-        sp = {
-            'virtual_host': url.virtual_host,
-        }
+        if url.virtual_host is not None:
+            sp['virtual_host'] = url.virtual_host
 
-        # FIXME(markmc): support multiple hosts
-        host = url.hosts[0]
+        if url.hosts:
+            # FIXME(markmc): support multiple hosts
+            host = url.hosts[0]
 
-        sp['hostname'] = host.hostname
-        if host.port is not None:
-            sp['port'] = host.port
-        sp['username'] = host.username or ''
-        sp['password'] = host.password or ''
+            sp['hostname'] = host.hostname
+            if host.port is not None:
+                sp['port'] = host.port
+            sp['username'] = host.username or ''
+            sp['password'] = host.password or ''
 
         return sp
 
     def _get_connection(self, pooled=True):
+        # FIXME(markmc): we don't yet have a connection pool for each
+        # Transport instance, so we'll only use the pool with the
+        # transport configuration from the config file
+        server_params = self._server_params or None
+        if server_params:
+            pooled = False
         return rpc_amqp.ConnectionContext(self.conf,
                                           self._connection_pool,
                                           pooled=pooled,
-                                          server_params=self._server_params)
+                                          server_params=server_params)
 
     def _get_reply_q(self):
         with self._reply_q_lock:

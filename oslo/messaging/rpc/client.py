@@ -23,9 +23,8 @@ __all__ = [
     'RemoteError',
 ]
 
-import logging
-
 from oslo.config import cfg
+import six
 
 from oslo.messaging._drivers import base as driver_base
 from oslo.messaging import _utils as utils
@@ -37,8 +36,6 @@ _client_opts = [
                default=60,
                help='Seconds to wait for a response from a call'),
 ]
-
-_LOG = logging.getLogger(__name__)
 
 
 class RemoteError(exceptions.MessagingException):
@@ -102,7 +99,7 @@ class _CallContext(object):
         msg = dict(method=method)
 
         msg['args'] = dict()
-        for argname, arg in args.iteritems():
+        for argname, arg in six.iteritems(args):
             msg['args'][argname] = self.serializer.serialize_entity(ctxt, arg)
 
         if self.target.namespace is not None:
@@ -236,7 +233,7 @@ class RPCClient(object):
             return cctxt.call(ctxt, 'test', arg=arg)
 
     However, this class can be used directly without wrapping it another class.
-    For example:
+    For example::
 
         transport = messaging.get_transport(cfg.CONF)
         target = messaging.Target(topic='testtopic', version='2.0')
@@ -342,7 +339,7 @@ class RPCClient(object):
         listed in the allow_remote_exmods messaging.get_transport() parameter,
         then it this exception will be re-raised by call(). However, such
         locally re-raised remote exceptions are distinguishable from the same
-        exception type raised locally becayse re-raised remote exceptions are
+        exception type raised locally because re-raised remote exceptions are
         modified such that their class name ends with the '_Remote' suffix so
         you may do::
 

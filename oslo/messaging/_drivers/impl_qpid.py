@@ -1,5 +1,3 @@
-# vim: tabstop=4 shiftwidth=4 softtabstop=4
-
 #    Copyright 2011 OpenStack Foundation
 #    Copyright 2011 - 2012, Red Hat, Inc.
 #
@@ -19,11 +17,11 @@ import functools
 import itertools
 import logging
 import time
-import uuid
 
 import eventlet
 import greenlet
 from oslo.config import cfg
+import six
 
 from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
@@ -53,10 +51,10 @@ qpid_opts = [
                 help='Qpid HA cluster host:port pairs'),
     cfg.StrOpt('qpid_username',
                default='',
-               help='Username for qpid connection'),
+               help='Username for Qpid connection'),
     cfg.StrOpt('qpid_password',
                default='',
-               help='Password for qpid connection',
+               help='Password for Qpid connection',
                secret=True),
     cfg.StrOpt('qpid_sasl_mechanisms',
                default='',
@@ -70,15 +68,33 @@ qpid_opts = [
     cfg.BoolOpt('qpid_tcp_nodelay',
                 default=True,
                 help='Disable Nagle algorithm'),
+    # NOTE(russellb) If any additional versions are added (beyond 1 and 2),
+    # this file could probably use some additional refactoring so that the
+    # differences between each version are split into different classes.
+    cfg.IntOpt('qpid_topology_version',
+               default=1,
+               help="The qpid topology version to use.  Version 1 is what "
+                    "was originally used by impl_qpid.  Version 2 includes "
+                    "some backwards-incompatible changes that allow broker "
+                    "federation to work.  Users should update to version 2 "
+                    "when they are able to take everything down, as it "
+                    "requires a clean break."),
 ]
 
 JSON_CONTENT_TYPE = 'application/json; charset=utf8'
 
 
+def raise_invalid_topology_version(conf):
+    msg = (_("Invalid value for qpid_topology_version: %d") %
+           conf.qpid_topology_version)
+    LOG.error(msg)
+    raise Exception(msg)
+
+
 class ConsumerBase(object):
     """Consumer base class."""
 
-    def __init__(self, session, callback, node_name, node_opts,
+    def __init__(self, conf, session, callback, node_name, node_opts,
                  link_name, link_opts):
         """Declare a queue on an amqp session.
 
@@ -96,38 +112,52 @@ class ConsumerBase(object):
         self.receiver = None
         self.session = None
 
-        addr_opts = {
-            "create": "always",
-            "node": {
-                "type": "topic",
-                "x-declare": {
+        if conf.qpid_topology_version == 1:
+            addr_opts = {
+                "create": "always",
+                "node": {
+                    "type": "topic",
+                    "x-declare": {
+                        "durable": True,
+                        "auto-delete": True,
+                    },
+                },
+                "link": {
                     "durable": True,
-                    "auto-delete": True,
+                    "x-declare": {
+                        "durable": False,
+                        "auto-delete": True,
+                        "exclusive": False,
+                    },
                 },
-            },
-            "link": {
-                "name": link_name,
-                "durable": True,
-                "x-declare": {
-                    "durable": False,
-                    "auto-delete": True,
-                    "exclusive": False,
+            }
+            addr_opts["node"]["x-declare"].update(node_opts)
+        elif conf.qpid_topology_version == 2:
+            addr_opts = {
+                "link": {
+                    "x-declare": {
+                        "auto-delete": True,
+                        "exclusive": False,
+                    },
                 },
-            },
-        }
-        addr_opts["node"]["x-declare"].update(node_opts)
+            }
+        else:
+            raise_invalid_topology_version(conf)
+
         addr_opts["link"]["x-declare"].update(link_opts)
+        if link_name:
+            addr_opts["link"]["name"] = link_name
 
         self.address = "%s ; %s" % (node_name, jsonutils.dumps(addr_opts))
 
         self.connect(session)
 
     def connect(self, session):
-        """Declare the reciever on connect."""
+        """Declare the receiver on connect."""
         self._declare_receiver(session)
 
     def reconnect(self, session):
-        """Re-declare the receiver after a qpid reconnect."""
+        """Re-declare the receiver after a Qpid reconnect."""
         self._declare_receiver(session)
 
     def _declare_receiver(self, session):
@@ -161,7 +191,6 @@ class ConsumerBase(object):
         except Exception:
             LOG.exception(_("Failed to process message... skipping it."))
         finally:
-            # TODO(sandy): Need support for optional ack_on_error.
             self.session.acknowledge(message)
 
     def get_receiver(self):
@@ -182,16 +211,26 @@ class DirectConsumer(ConsumerBase):
         'callback' is the callback to call when messages are received
         """
 
-        super(DirectConsumer, self).__init__(
-            session, callback,
-            "%s/%s" % (msg_id, msg_id),
-            {"type": "direct"},
-            msg_id,
-            {
-                "auto-delete": conf.amqp_auto_delete,
-                "exclusive": True,
-                "durable": conf.amqp_durable_queues,
-            })
+        link_opts = {
+            "auto-delete": conf.amqp_auto_delete,
+            "exclusive": True,
+            "durable": conf.amqp_durable_queues,
+        }
+
+        if conf.qpid_topology_version == 1:
+            node_name = "%s/%s" % (msg_id, msg_id)
+            node_opts = {"type": "direct"}
+            link_name = msg_id
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.direct/%s" % msg_id
+            node_opts = {}
+            link_name = None
+        else:
+            raise_invalid_topology_version(conf)
+
+        super(DirectConsumer, self).__init__(conf, session, callback,
+                                             node_name, node_opts, link_name,
+                                             link_opts)
 
 
 class TopicConsumer(ConsumerBase):
@@ -209,14 +248,20 @@ class TopicConsumer(ConsumerBase):
         """
 
         exchange_name = exchange_name or rpc_amqp.get_control_exchange(conf)
-        super(TopicConsumer, self).__init__(
-            session, callback,
-            "%s/%s" % (exchange_name, topic),
-            {}, name or topic,
-            {
-                "auto-delete": conf.amqp_auto_delete,
-                "durable": conf.amqp_durable_queues,
-            })
+        link_opts = {
+            "auto-delete": conf.amqp_auto_delete,
+            "durable": conf.amqp_durable_queues,
+        }
+
+        if conf.qpid_topology_version == 1:
+            node_name = "%s/%s" % (exchange_name, topic)
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.topic/topic/%s/%s" % (exchange_name, topic)
+        else:
+            raise_invalid_topology_version(conf)
+
+        super(TopicConsumer, self).__init__(conf, session, callback, node_name,
+                                            {}, name or topic, link_opts)
 
 
 class FanoutConsumer(ConsumerBase):
@@ -231,52 +276,53 @@ class FanoutConsumer(ConsumerBase):
         """
         self.conf = conf
 
-        super(FanoutConsumer, self).__init__(
-            session, callback,
-            "%s_fanout" % topic,
-            {"durable": False, "type": "fanout"},
-            "%s_fanout_%s" % (topic, uuid.uuid4().hex),
-            {"exclusive": True})
+        link_opts = {"exclusive": True}
 
-    def reconnect(self, session):
-        topic = self.get_node_name().rpartition('_fanout')[0]
-        params = {
-            'session': session,
-            'topic': topic,
-            'callback': self.callback,
-        }
+        if conf.qpid_topology_version == 1:
+            node_name = "%s_fanout" % topic
+            node_opts = {"durable": False, "type": "fanout"}
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.topic/fanout/%s" % topic
+            node_opts = {}
+        else:
+            raise_invalid_topology_version(conf)
 
-        self.__init__(conf=self.conf, **params)
-
-        super(FanoutConsumer, self).reconnect(session)
+        super(FanoutConsumer, self).__init__(conf, session, callback,
+                                             node_name, node_opts, None,
+                                             link_opts)
 
 
 class Publisher(object):
     """Base Publisher class."""
 
-    def __init__(self, session, node_name, node_opts=None):
+    def __init__(self, conf, session, node_name, node_opts=None):
         """Init the Publisher class with the exchange_name, routing_key,
         and other options
         """
         self.sender = None
         self.session = session
 
-        addr_opts = {
-            "create": "always",
-            "node": {
-                "type": "topic",
-                "x-declare": {
-                    "durable": False,
-                    # auto-delete isn't implemented for exchanges in qpid,
-                    # but put in here anyway
-                    "auto-delete": True,
+        if conf.qpid_topology_version == 1:
+            addr_opts = {
+                "create": "always",
+                "node": {
+                    "type": "topic",
+                    "x-declare": {
+                        "durable": False,
+                        # auto-delete isn't implemented for exchanges in qpid,
+                        # but put in here anyway
+                        "auto-delete": True,
+                    },
                 },
-            },
-        }
-        if node_opts:
-            addr_opts["node"]["x-declare"].update(node_opts)
+            }
+            if node_opts:
+                addr_opts["node"]["x-declare"].update(node_opts)
 
-        self.address = "%s ; %s" % (node_name, jsonutils.dumps(addr_opts))
+            self.address = "%s ; %s" % (node_name, jsonutils.dumps(addr_opts))
+        elif conf.qpid_topology_version == 2:
+            self.address = node_name
+        else:
+            raise_invalid_topology_version(conf)
 
         self.reconnect(session)
 
@@ -320,39 +366,73 @@ class DirectPublisher(Publisher):
     """Publisher class for 'direct'."""
     def __init__(self, conf, session, msg_id):
         """Init a 'direct' publisher."""
-        super(DirectPublisher, self).__init__(session, msg_id,
-                                              {"type": "Direct"})
+
+        if conf.qpid_topology_version == 1:
+            node_name = msg_id
+            node_opts = {"type": "direct"}
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.direct/%s" % msg_id
+            node_opts = {}
+        else:
+            raise_invalid_topology_version(conf)
+
+        super(DirectPublisher, self).__init__(conf, session, node_name,
+                                              node_opts)
 
 
 class TopicPublisher(Publisher):
     """Publisher class for 'topic'."""
     def __init__(self, conf, session, topic):
-        """init a 'topic' publisher.
+        """Init a 'topic' publisher.
         """
         exchange_name = rpc_amqp.get_control_exchange(conf)
-        super(TopicPublisher, self).__init__(session,
-                                             "%s/%s" % (exchange_name, topic))
+
+        if conf.qpid_topology_version == 1:
+            node_name = "%s/%s" % (exchange_name, topic)
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.topic/topic/%s/%s" % (exchange_name, topic)
+        else:
+            raise_invalid_topology_version(conf)
+
+        super(TopicPublisher, self).__init__(conf, session, node_name)
 
 
 class FanoutPublisher(Publisher):
     """Publisher class for 'fanout'."""
     def __init__(self, conf, session, topic):
-        """init a 'fanout' publisher.
+        """Init a 'fanout' publisher.
         """
-        super(FanoutPublisher, self).__init__(
-            session,
-            "%s_fanout" % topic, {"type": "fanout"})
+
+        if conf.qpid_topology_version == 1:
+            node_name = "%s_fanout" % topic
+            node_opts = {"type": "fanout"}
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.topic/fanout/%s" % topic
+            node_opts = {}
+        else:
+            raise_invalid_topology_version(conf)
+
+        super(FanoutPublisher, self).__init__(conf, session, node_name,
+                                              node_opts)
 
 
 class NotifyPublisher(Publisher):
     """Publisher class for notifications."""
     def __init__(self, conf, session, topic):
-        """init a 'topic' publisher.
+        """Init a 'topic' publisher.
         """
         exchange_name = rpc_amqp.get_control_exchange(conf)
-        super(NotifyPublisher, self).__init__(session,
-                                              "%s/%s" % (exchange_name, topic),
-                                              {"durable": True})
+        node_opts = {"durable": True}
+
+        if conf.qpid_topology_version == 1:
+            node_name = "%s/%s" % (exchange_name, topic)
+        elif conf.qpid_topology_version == 2:
+            node_name = "amq.topic/topic/%s/%s" % (exchange_name, topic)
+        else:
+            raise_invalid_topology_version(conf)
+
+        super(NotifyPublisher, self).__init__(conf, session, node_name,
+                                              node_opts)
 
 
 class Connection(object):
@@ -364,6 +444,7 @@ class Connection(object):
         if not qpid_messaging:
             raise ImportError("Failed to import qpid.messaging")
 
+        self.connection = None
         self.session = None
         self.consumers = {}
         self.consumer_thread = None
@@ -387,7 +468,6 @@ class Connection(object):
         self.brokers = params['qpid_hosts']
         self.username = params['username']
         self.password = params['password']
-        self.connection_create(self.brokers[0])
         self.reconnect()
 
     def connection_create(self, broker):
@@ -418,7 +498,7 @@ class Connection(object):
         delay = 1
         while True:
             # Close the session if necessary
-            if self.connection.opened():
+            if self.connection is not None and self.connection.opened():
                 try:
                     self.connection.close()
                 except qpid_exceptions.ConnectionError:
@@ -447,7 +527,7 @@ class Connection(object):
             consumers = self.consumers
             self.consumers = {}
 
-            for consumer in consumers.itervalues():
+            for consumer in six.itervalues(consumers):
                 consumer.reconnect(self.session)
                 self._register_consumer(consumer)
 
@@ -582,11 +662,11 @@ class Connection(object):
         #
         # We want to create a message with attributes, e.g. a TTL. We
         # don't really need to keep 'msg' in its JSON format any longer
-        # so let's create an actual qpid message here and get some
+        # so let's create an actual Qpid message here and get some
         # value-add on the go.
         #
         # WARNING: Request timeout happens to be in the same units as
-        # qpid's TTL (seconds). If this changes in the future, then this
+        # Qpid's TTL (seconds). If this changes in the future, then this
         # will need to be altered accordingly.
         #
         qpid_message = qpid_messaging.Message(content=msg, ttl=timeout)
@@ -605,7 +685,7 @@ class Connection(object):
         it = self.iterconsume(limit=limit, timeout=timeout)
         while True:
             try:
-                it.next()
+                six.next(it)
             except StopIteration:
                 return
 
@@ -620,124 +700,6 @@ class Connection(object):
         if self.consumer_thread is None:
             self.consumer_thread = eventlet.spawn(_consumer_thread)
         return self.consumer_thread
-
-    def create_consumer(self, topic, proxy, fanout=False):
-        """Create a consumer that calls a method in a proxy object."""
-        proxy_cb = rpc_amqp.ProxyCallback(
-            self.conf, proxy,
-            rpc_amqp.get_connection_pool(self.conf, Connection))
-        self.proxy_callbacks.append(proxy_cb)
-
-        if fanout:
-            consumer = FanoutConsumer(self.conf, self.session, topic, proxy_cb)
-        else:
-            consumer = TopicConsumer(self.conf, self.session, topic, proxy_cb)
-
-        self._register_consumer(consumer)
-
-        return consumer
-
-    def create_worker(self, topic, proxy, pool_name):
-        """Create a worker that calls a method in a proxy object."""
-        proxy_cb = rpc_amqp.ProxyCallback(
-            self.conf, proxy,
-            rpc_amqp.get_connection_pool(self.conf, Connection))
-        self.proxy_callbacks.append(proxy_cb)
-
-        consumer = TopicConsumer(self.conf, self.session, topic, proxy_cb,
-                                 name=pool_name)
-
-        self._register_consumer(consumer)
-
-        return consumer
-
-    def join_consumer_pool(self, callback, pool_name, topic,
-                           exchange_name=None, ack_on_error=True):
-        """Register as a member of a group of consumers for a given topic from
-        the specified exchange.
-
-        Exactly one member of a given pool will receive each message.
-
-        A message will be delivered to multiple pools, if more than
-        one is created.
-        """
-        callback_wrapper = rpc_amqp.CallbackWrapper(
-            conf=self.conf,
-            callback=callback,
-            connection_pool=rpc_amqp.get_connection_pool(self.conf,
-                                                         Connection),
-        )
-        self.proxy_callbacks.append(callback_wrapper)
-
-        consumer = TopicConsumer(conf=self.conf,
-                                 session=self.session,
-                                 topic=topic,
-                                 callback=callback_wrapper,
-                                 name=pool_name,
-                                 exchange_name=exchange_name)
-
-        self._register_consumer(consumer)
-        return consumer
-
-
-def create_connection(conf, new=True):
-    """Create a connection."""
-    return rpc_amqp.create_connection(
-        conf, new,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def multicall(conf, context, topic, msg, timeout=None):
-    """Make a call that returns multiple times."""
-    return rpc_amqp.multicall(
-        conf, context, topic, msg, timeout,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def call(conf, context, topic, msg, timeout=None):
-    """Sends a message on a topic and wait for a response."""
-    return rpc_amqp.call(
-        conf, context, topic, msg, timeout,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def cast(conf, context, topic, msg):
-    """Sends a message on a topic without waiting for a response."""
-    return rpc_amqp.cast(
-        conf, context, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def fanout_cast(conf, context, topic, msg):
-    """Sends a message on a fanout exchange without waiting for a response."""
-    return rpc_amqp.fanout_cast(
-        conf, context, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def cast_to_server(conf, context, server_params, topic, msg):
-    """Sends a message on a topic to a specific server."""
-    return rpc_amqp.cast_to_server(
-        conf, context, server_params, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def fanout_cast_to_server(conf, context, server_params, topic, msg):
-    """Sends a message on a fanout exchange to a specific server."""
-    return rpc_amqp.fanout_cast_to_server(
-        conf, context, server_params, topic, msg,
-        rpc_amqp.get_connection_pool(conf, Connection))
-
-
-def notify(conf, context, topic, msg, envelope):
-    """Sends a notification event on a topic."""
-    return rpc_amqp.notify(conf, context, topic, msg,
-                           rpc_amqp.get_connection_pool(conf, Connection),
-                           envelope)
-
-
-def cleanup():
-    return rpc_amqp.cleanup(Connection.pool)
 
 
 class QpidDriver(amqpdriver.AMQPDriverBase):
