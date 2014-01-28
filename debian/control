@@ -23,8 +23,8 @@ Build-Depends-Indep: python-eventlet,
                      python-testtools,
                      testrepository (>= 0.0.17)
 Standards-Version: 3.9.4
-Vcs-Browser: http://git.gplhost.com/gitweb/?p=openstack/oslo.messaging.git
-Vcs-Git: http://git.gplhost.com/openstack/oslo.messaging.git
+Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/oslo.messaging.git
+Vcs-Git: http://anonscm.debian.org/git/openstack/oslo.messaging.git
 Homepage: https://github.com/openstack/oslo.messaging
 
 Package: python-oslo.messaging
