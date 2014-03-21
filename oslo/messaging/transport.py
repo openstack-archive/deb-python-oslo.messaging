@@ -78,6 +78,9 @@ class Transport(object):
         self.conf = driver.conf
         self._driver = driver
 
+    def _require_driver_features(self, requeue=False):
+        self._driver.require_features(requeue=requeue)
+
     def _send(self, target, ctxt, message, wait_for_reply=None, timeout=None):
         if not target.topic:
             raise exceptions.InvalidTarget('A topic is required to send',
@@ -98,6 +101,14 @@ class Transport(object):
                                            'topic and server names specified',
                                            target)
         return self._driver.listen(target)
+
+    def _listen_for_notifications(self, targets_and_priorities):
+        for target, priority in targets_and_priorities:
+            if not target.topic:
+                raise exceptions.InvalidTarget('A target must have '
+                                               'topic specified',
+                                               target)
+        return self._driver.listen_for_notifications(targets_and_priorities)
 
     def cleanup(self):
         """Release all resources associated with this transport."""

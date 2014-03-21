@@ -26,9 +26,9 @@ from oslo.messaging._drivers import base
 
 
 class FakeIncomingMessage(base.IncomingMessage):
-
-    def __init__(self, listener, ctxt, message, reply_q):
+    def __init__(self, listener, ctxt, message, reply_q, requeue):
         super(FakeIncomingMessage, self).__init__(listener, ctxt, message)
+        self.requeue_callback = requeue
         self._reply_q = reply_q
 
     def reply(self, reply=None, failure=None, log_failure=True):
@@ -36,18 +36,26 @@ class FakeIncomingMessage(base.IncomingMessage):
             failure = failure[1] if failure else None
             self._reply_q.put((reply, failure))
 
+    def requeue(self):
+        self.requeue_callback()
+
 
 class FakeListener(base.Listener):
 
-    def __init__(self, driver, target, exchange):
-        super(FakeListener, self).__init__(driver, target)
-        self._exchange = exchange
+    def __init__(self, driver, exchange_manager, targets):
+        super(FakeListener, self).__init__(driver)
+        self._exchange_manager = exchange_manager
+        self._targets = targets
 
     def poll(self):
         while True:
-            (ctxt, message, reply_q) = self._exchange.poll(self.target)
-            if message is not None:
-                return FakeIncomingMessage(self, ctxt, message, reply_q)
+            for target in self._targets:
+                exchange = self._exchange_manager.get_exchange(target.exchange)
+                (ctxt, message, reply_q, requeue) = exchange.poll(target)
+                if message is not None:
+                    message = FakeIncomingMessage(self, ctxt, message,
+                                                  reply_q, requeue)
+                    return message
             time.sleep(.05)
 
 
@@ -55,7 +63,7 @@ class FakeExchange(object):
 
     def __init__(self, name):
         self.name = name
-        self._queues_lock = threading.Lock()
+        self._queues_lock = threading.RLock()
         self._topic_queues = {}
         self._server_queues = {}
 
@@ -75,15 +83,34 @@ class FakeExchange(object):
                 queues = [self._get_server_queue(topic, server)]
             else:
                 queues = [self._get_topic_queue(topic)]
+
+            def requeue():
+                self.deliver_message(topic, ctxt, message, server=server,
+                                     fanout=fanout, reply_q=reply_q)
+
             for queue in queues:
-                queue.append((ctxt, message, reply_q))
+                queue.append((ctxt, message, reply_q, requeue))
 
     def poll(self, target):
         with self._queues_lock:
-            queue = self._get_server_queue(target.topic, target.server)
-            if not queue:
+            if target.server:
+                queue = self._get_server_queue(target.topic, target.server)
+            else:
                 queue = self._get_topic_queue(target.topic)
-            return queue.pop(0) if queue else (None, None, None)
+            return queue.pop(0) if queue else (None, None, None, None)
+
+
+class FakeExchangeManager(object):
+    def __init__(self, default_exchange):
+        self._default_exchange = default_exchange
+        self._exchanges_lock = threading.Lock()
+        self._exchanges = {}
+
+    def get_exchange(self, name):
+        if name is None:
+            name = self._default_exchange
+        while self._exchanges_lock:
+            return self._exchanges.setdefault(name, FakeExchange(name))
 
 
 class FakeDriver(base.BaseDriver):
@@ -93,10 +120,10 @@ class FakeDriver(base.BaseDriver):
         super(FakeDriver, self).__init__(conf, url, default_exchange,
                                          allowed_remote_exmods=[])
 
-        self._default_exchange = default_exchange
+        self._exchange_manager = FakeExchangeManager(default_exchange)
 
-        self._exchanges_lock = threading.Lock()
-        self._exchanges = {}
+    def require_features(self, requeue=True):
+        pass
 
     @staticmethod
     def _check_serialize(message):
@@ -110,15 +137,10 @@ class FakeDriver(base.BaseDriver):
         """
         json.dumps(message)
 
-    def _get_exchange(self, name):
-        while self._exchanges_lock:
-            return self._exchanges.setdefault(name, FakeExchange(name))
-
     def _send(self, target, ctxt, message, wait_for_reply=None, timeout=None):
         self._check_serialize(message)
 
-        exchange = self._get_exchange(target.exchange or
-                                      self._default_exchange)
+        exchange = self._exchange_manager.get_exchange(target.exchange)
 
         reply_q = None
         if wait_for_reply:
@@ -149,10 +171,22 @@ class FakeDriver(base.BaseDriver):
         self._send(target, ctxt, message)
 
     def listen(self, target):
-        exchange = self._get_exchange(target.exchange or
-                                      self._default_exchange)
+        exchange = target.exchange or self._default_exchange
+        listener = FakeListener(self, self._exchange_manager,
+                                [messaging.Target(topic=target.topic,
+                                                  server=target.server,
+                                                  exchange=exchange),
+                                 messaging.Target(topic=target.topic,
+                                                  exchange=exchange)])
+        return listener
 
-        return FakeListener(self, target, exchange)
+    def listen_for_notifications(self, targets_and_priorities):
+        targets = [messaging.Target(topic='%s.%s' % (target.topic, priority),
+                                    exchange=target.exchange)
+                   for target, priority in targets_and_priorities]
+        listener = FakeListener(self, self._exchange_manager, targets)
+
+        return listener
 
     def cleanup(self):
         pass

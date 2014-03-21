@@ -14,7 +14,11 @@
 #    under the License.
 
 __all__ = ['Notifier',
-           'LoggingNotificationHandler']
+           'LoggingNotificationHandler',
+           'get_notification_listener',
+           'NotificationResult']
 
 from .notifier import *
+from .listener import *
 from .logger import *
+from .dispatcher import NotificationResult

@@ -18,15 +18,12 @@ import itertools
 import logging
 import time
 
-import eventlet
-import greenlet
 from oslo.config import cfg
 import six
 
 from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
 from oslo.messaging._drivers import common as rpc_common
-from oslo.messaging.openstack.common import excutils
 from oslo.messaging.openstack.common import importutils
 from oslo.messaging.openstack.common import jsonutils
 
@@ -42,32 +39,33 @@ LOG = logging.getLogger(__name__)
 qpid_opts = [
     cfg.StrOpt('qpid_hostname',
                default='localhost',
-               help='Qpid broker hostname'),
+               help='Qpid broker hostname.'),
     cfg.IntOpt('qpid_port',
                default=5672,
-               help='Qpid broker port'),
+               help='Qpid broker port.'),
     cfg.ListOpt('qpid_hosts',
                 default=['$qpid_hostname:$qpid_port'],
-                help='Qpid HA cluster host:port pairs'),
+                help='Qpid HA cluster host:port pairs.'),
     cfg.StrOpt('qpid_username',
                default='',
-               help='Username for Qpid connection'),
+               help='Username for Qpid connection.'),
     cfg.StrOpt('qpid_password',
                default='',
-               help='Password for Qpid connection',
+               help='Password for Qpid connection.',
                secret=True),
     cfg.StrOpt('qpid_sasl_mechanisms',
                default='',
-               help='Space separated list of SASL mechanisms to use for auth'),
+               help='Space separated list of SASL mechanisms to use for '
+                    'auth.'),
     cfg.IntOpt('qpid_heartbeat',
                default=60,
-               help='Seconds between connection keepalive heartbeats'),
+               help='Seconds between connection keepalive heartbeats.'),
     cfg.StrOpt('qpid_protocol',
                default='tcp',
-               help="Transport to use, either 'tcp' or 'ssl'"),
+               help="Transport to use, either 'tcp' or 'ssl'."),
     cfg.BoolOpt('qpid_tcp_nodelay',
                 default=True,
-                help='Disable Nagle algorithm'),
+                help='Whether to disable the Nagle algorithm.'),
     # NOTE(russellb) If any additional versions are added (beyond 1 and 2),
     # this file could probably use some additional refactoring so that the
     # differences between each version are split into different classes.
@@ -89,6 +87,20 @@ def raise_invalid_topology_version(conf):
            conf.qpid_topology_version)
     LOG.error(msg)
     raise Exception(msg)
+
+
+class QpidMessage(dict):
+    def __init__(self, session, raw_message):
+        super(QpidMessage, self).__init__(
+            rpc_common.deserialize_msg(raw_message.content))
+        self._raw_message = raw_message
+        self._session = session
+
+    def acknowledge(self):
+        self._session.acknowledge(self._raw_message)
+
+    def requeue(self):
+        pass
 
 
 class ConsumerBase(object):
@@ -186,11 +198,9 @@ class ConsumerBase(object):
         message = self.receiver.fetch()
         try:
             self._unpack_json_msg(message)
-            msg = rpc_common.deserialize_msg(message.content)
-            self.callback(msg)
+            self.callback(QpidMessage(self.session, message))
         except Exception:
             LOG.exception(_("Failed to process message... skipping it."))
-        finally:
             self.session.acknowledge(message)
 
     def get_receiver(self):
@@ -447,8 +457,6 @@ class Connection(object):
         self.connection = None
         self.session = None
         self.consumers = {}
-        self.consumer_thread = None
-        self.proxy_callbacks = []
         self.conf = conf
 
         if server_params and 'hostname' in server_params:
@@ -466,6 +474,10 @@ class Connection(object):
         params.update(server_params or {})
 
         self.brokers = params['qpid_hosts']
+
+        brokers_count = len(self.brokers)
+        self.next_broker_indices = itertools.cycle(range(brokers_count))
+
         self.username = params['username']
         self.password = params['password']
         self.reconnect()
@@ -494,7 +506,6 @@ class Connection(object):
 
     def reconnect(self):
         """Handles reconnecting and re-establishing sessions and queues."""
-        attempt = 0
         delay = 1
         while True:
             # Close the session if necessary
@@ -504,8 +515,7 @@ class Connection(object):
                 except qpid_exceptions.ConnectionError:
                     pass
 
-            broker = self.brokers[attempt % len(self.brokers)]
-            attempt += 1
+            broker = self.brokers[next(self.next_broker_indices)]
 
             try:
                 self.connection_create(broker)
@@ -516,7 +526,7 @@ class Connection(object):
                         "Sleeping %(delay)s seconds") % msg_dict
                 LOG.error(msg)
                 time.sleep(delay)
-                delay = min(2 * delay, 60)
+                delay = min(delay + 1, 5)
             else:
                 LOG.info(_('Connected to AMQP server on %s'), broker)
                 break
@@ -545,8 +555,6 @@ class Connection(object):
 
     def close(self):
         """Close/release this connection."""
-        self.cancel_consumer_thread()
-        self.wait_on_proxy_callbacks()
         try:
             self.connection.close()
         except Exception:
@@ -558,8 +566,6 @@ class Connection(object):
 
     def reset(self):
         """Reset a connection so it can be used again."""
-        self.cancel_consumer_thread()
-        self.wait_on_proxy_callbacks()
         self.session.close()
         self.session = self.connection.session()
         self.consumers = {}
@@ -603,21 +609,6 @@ class Connection(object):
             if limit and iteration >= limit:
                 raise StopIteration
             yield self.ensure(_error_callback, _consume)
-
-    def cancel_consumer_thread(self):
-        """Cancel a consumer thread."""
-        if self.consumer_thread is not None:
-            self.consumer_thread.kill()
-            try:
-                self.consumer_thread.wait()
-            except greenlet.GreenletExit:
-                pass
-            self.consumer_thread = None
-
-    def wait_on_proxy_callbacks(self):
-        """Wait for all proxy callback threads to exit."""
-        for proxy_cb in self.proxy_callbacks:
-            proxy_cb.wait()
 
     def publisher_send(self, cls, topic, msg):
         """Send to a publisher based on the publisher class."""
@@ -688,18 +679,6 @@ class Connection(object):
                 six.next(it)
             except StopIteration:
                 return
-
-    def consume_in_thread(self):
-        """Consumer from all queues/consumers in a greenthread."""
-        @excutils.forever_retry_uncaught_exceptions
-        def _consumer_thread():
-            try:
-                self.consume()
-            except greenlet.GreenletExit:
-                return
-        if self.consumer_thread is None:
-            self.consumer_thread = eventlet.spawn(_consumer_thread)
-        return self.consumer_thread
 
 
 class QpidDriver(amqpdriver.AMQPDriverBase):

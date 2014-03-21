@@ -92,11 +92,8 @@ to - primitive types.
 
 __all__ = [
     'get_rpc_server',
-    'ExpectedException',
     'expected_exceptions',
 ]
-
-import sys
 
 from oslo.messaging.rpc import dispatcher as rpc_dispatcher
 from oslo.messaging import server as msg_server
@@ -121,20 +118,8 @@ def get_rpc_server(transport, target, endpoints,
     :param serializer: an optional entity serializer
     :type serializer: Serializer
     """
-    dispatcher = rpc_dispatcher.RPCDispatcher(endpoints, serializer)
-    return msg_server.MessageHandlingServer(transport, target,
-                                            dispatcher, executor)
-
-
-class ExpectedException(Exception):
-    """Encapsulates an expected exception raised by an RPC endpoint
-
-    Merely instantiating this exception records the current exception
-    information, which  will be passed back to the RPC client without
-    exceptional logging.
-    """
-    def __init__(self):
-        self.exc_info = sys.exc_info()
+    dispatcher = rpc_dispatcher.RPCDispatcher(target, endpoints, serializer)
+    return msg_server.MessageHandlingServer(transport, dispatcher, executor)
 
 
 def expected_exceptions(*exceptions):
@@ -152,10 +137,13 @@ def expected_exceptions(*exceptions):
         def inner(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
-            except Exception as e:
-                if type(e) in exceptions:
-                    raise ExpectedException()
-                else:
-                    raise
+            # Take advantage of the fact that we can catch
+            # multiple exception types using a tuple of
+            # exception classes, with subclass detection
+            # for free. Any exception that is not in or
+            # derived from the args passed to us will be
+            # ignored and thrown as normal.
+            except exceptions:
+                raise rpc_dispatcher.ExpectedException()
         return inner
     return outer

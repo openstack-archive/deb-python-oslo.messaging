@@ -50,7 +50,7 @@ amqp_opts = [
     # FIXME(markmc): this was toplevel in openstack.common.rpc
     cfg.IntOpt('rpc_conn_pool_size',
                default=30,
-               help='Size of RPC connection pool'),
+               help='Size of RPC connection pool.'),
 ]
 
 UNIQUE_ID = '_unique_id'
@@ -318,12 +318,17 @@ class _MsgIdCache(object):
         """AMQP consumers may read same message twice when exceptions occur
            before ack is returned. This method prevents doing it.
         """
-        if UNIQUE_ID in message_data:
+        try:
             msg_id = message_data.pop(UNIQUE_ID)
-            if msg_id not in self.prev_msgids:
-                self.prev_msgids.append(msg_id)
-            else:
-                raise rpc_common.DuplicateMessageError(msg_id=msg_id)
+        except KeyError:
+            return
+        if msg_id in self.prev_msgids:
+            raise rpc_common.DuplicateMessageError(msg_id=msg_id)
+        return msg_id
+
+    def add(self, msg_id):
+        if msg_id and msg_id not in self.prev_msgids:
+            self.prev_msgids.append(msg_id)
 
 
 def _add_unique_id(msg):

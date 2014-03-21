@@ -60,22 +60,22 @@ zmq_opts = [
         'rpc_zmq_matchmaker',
         default=('oslo.messaging._drivers.'
                  'matchmaker.MatchMakerLocalhost'),
-        help='MatchMaker driver',
+        help='MatchMaker driver.',
     ),
 
     # The following port is unassigned by IANA as of 2012-05-21
     cfg.IntOpt('rpc_zmq_port', default=9501,
-               help='ZeroMQ receiver listening port'),
+               help='ZeroMQ receiver listening port.'),
 
     cfg.IntOpt('rpc_zmq_contexts', default=1,
-               help='Number of ZeroMQ contexts, defaults to 1'),
+               help='Number of ZeroMQ contexts, defaults to 1.'),
 
     cfg.IntOpt('rpc_zmq_topic_backlog', default=None,
                help='Maximum number of ingress messages to locally buffer '
                     'per topic. Default is unlimited.'),
 
     cfg.StrOpt('rpc_zmq_ipc_dir', default='/var/run/openstack',
-               help='Directory for holding IPC sockets'),
+               help='Directory for holding IPC sockets.'),
 
     cfg.StrOpt('rpc_zmq_host', default=socket.gethostname(),
                help='Name of this node. Must be a valid hostname, FQDN, or '
@@ -843,11 +843,14 @@ class ZmqIncomingMessage(base.IncomingMessage):
         with self.condition:
             self.condition.notify()
 
+    def requeue(self):
+        pass
+
 
 class ZmqListener(base.Listener):
 
-    def __init__(self, driver, target):
-        super(ZmqListener, self).__init__(driver, target)
+    def __init__(self, driver):
+        super(ZmqListener, self).__init__(driver)
         self.incoming_queue = moves.queue.Queue()
 
     def dispatch(self, ctxt, version, method, namespace, **kwargs):
@@ -948,13 +951,29 @@ class ZmqDriver(base.BaseDriver):
     def listen(self, target):
         conn = create_connection(self.conf)
 
-        listener = ZmqListener(self, target)
+        listener = ZmqListener(self)
 
         conn.create_consumer(target.topic, listener)
         conn.create_consumer('%s.%s' % (target.topic, target.server),
                              listener)
         conn.create_consumer(target.topic, listener, fanout=True)
 
+        conn.consume_in_thread()
+
+        return listener
+
+    def listen_for_notifications(self, targets_and_priorities):
+        # NOTE(sileht): this listener implementation is limited
+        # because zeromq doesn't support requeing message
+        conn = create_connection(self.conf)
+
+        listener = ZmqListener(self, None)
+        for target, priority in targets_and_priorities:
+            # NOTE(ewindisch): dot-priority in rpc notifier does not
+            # work with our assumptions.
+            # NOTE(sileht): create_consumer doesn't support target.exchange
+            conn.create_consumer('%s-%s' % (target.topic, priority),
+                                 listener)
         conn.consume_in_thread()
 
         return listener

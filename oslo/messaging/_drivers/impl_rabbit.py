@@ -20,8 +20,6 @@ import ssl
 import time
 import uuid
 
-import eventlet
-import greenlet
 import kombu
 import kombu.connection
 import kombu.entity
@@ -32,9 +30,7 @@ import six
 from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
 from oslo.messaging._drivers import common as rpc_common
-from oslo.messaging.openstack.common import excutils
 from oslo.messaging.openstack.common import network_utils
-from oslo.messaging.openstack.common import sslutils
 
 # FIXME(markmc): remove this
 _ = lambda s: s
@@ -44,61 +40,69 @@ rabbit_opts = [
                default='',
                help='SSL version to use (valid only if SSL enabled). '
                     'valid values are TLSv1, SSLv23 and SSLv3. SSLv2 may '
-                    'be available on some distributions'
+                    'be available on some distributions.'
                ),
     cfg.StrOpt('kombu_ssl_keyfile',
                default='',
-               help='SSL key file (valid only if SSL enabled)'),
+               help='SSL key file (valid only if SSL enabled).'),
     cfg.StrOpt('kombu_ssl_certfile',
                default='',
-               help='SSL cert file (valid only if SSL enabled)'),
+               help='SSL cert file (valid only if SSL enabled).'),
     cfg.StrOpt('kombu_ssl_ca_certs',
                default='',
                help=('SSL certification authority file '
-                     '(valid only if SSL enabled)')),
+                     '(valid only if SSL enabled).')),
+    cfg.FloatOpt('kombu_reconnect_delay',
+                 default=1.0,
+                 help='How long to wait before reconnecting in response to an '
+                      'AMQP consumer cancel notification.'),
     cfg.StrOpt('rabbit_host',
                default='localhost',
-               help='The RabbitMQ broker address where a single node is used'),
+               help='The RabbitMQ broker address where a single node is '
+                    'used.'),
     cfg.IntOpt('rabbit_port',
                default=5672,
-               help='The RabbitMQ broker port where a single node is used'),
+               help='The RabbitMQ broker port where a single node is used.'),
     cfg.ListOpt('rabbit_hosts',
                 default=['$rabbit_host:$rabbit_port'],
-                help='RabbitMQ HA cluster host:port pairs'),
+                help='RabbitMQ HA cluster host:port pairs.'),
     cfg.BoolOpt('rabbit_use_ssl',
                 default=False,
-                help='connect over SSL for RabbitMQ'),
+                help='Connect over SSL for RabbitMQ.'),
     cfg.StrOpt('rabbit_userid',
                default='guest',
-               help='the RabbitMQ userid'),
+               help='The RabbitMQ userid.'),
     cfg.StrOpt('rabbit_password',
                default='guest',
-               help='the RabbitMQ password',
+               help='The RabbitMQ password.',
                secret=True),
+    cfg.StrOpt('rabbit_login_method',
+               default='AMQPLAIN',
+               help='the RabbitMQ login method'),
     cfg.StrOpt('rabbit_virtual_host',
                default='/',
-               help='the RabbitMQ virtual host'),
+               help='The RabbitMQ virtual host.'),
     cfg.IntOpt('rabbit_retry_interval',
                default=1,
-               help='how frequently to retry connecting with RabbitMQ'),
+               help='How frequently to retry connecting with RabbitMQ.'),
     cfg.IntOpt('rabbit_retry_backoff',
                default=2,
-               help='how long to backoff for between retries when connecting '
-                    'to RabbitMQ'),
+               help='How long to backoff for between retries when connecting '
+                    'to RabbitMQ.'),
     cfg.IntOpt('rabbit_max_retries',
                default=0,
-               help='maximum retries with trying to connect to RabbitMQ '
-                    '(the default of 0 implies an infinite retry count)'),
+               help='Maximum number of RabbitMQ connection retries. '
+                    'Default is 0 (infinite retry count).'),
     cfg.BoolOpt('rabbit_ha_queues',
                 default=False,
-                help='use H/A queues in RabbitMQ (x-ha-policy: all).'
-                     'You need to wipe RabbitMQ database when '
-                     'changing this option.'),
+                help='Use HA queues in RabbitMQ (x-ha-policy: all). '
+                     'If you change this option, you must wipe the '
+                     'RabbitMQ database.'),
 
     # FIXME(markmc): this was toplevel in openstack.common.rpc
     cfg.BoolOpt('fake_rabbit',
                 default=False,
-                help='If passed, use a fake RabbitMQ provider'),
+                help='If passed, use a fake RabbitMQ provider.'),
 ]
 
 LOG = logging.getLogger(__name__)
@@ -116,6 +120,19 @@ def _get_queue_arguments(conf):
     to all nodes in the cluster.
     """
     return {'x-ha-policy': 'all'} if conf.rabbit_ha_queues else {}
+
+
+class RabbitMessage(dict):
+    def __init__(self, raw_message):
+        super(RabbitMessage, self).__init__(
+            rpc_common.deserialize_msg(raw_message.payload))
+        self._raw_message = raw_message
+
+    def acknowledge(self):
+        self._raw_message.ack()
+
+    def requeue(self):
+        self._raw_message.requeue()
 
 
 class ConsumerBase(object):
@@ -151,12 +168,11 @@ class ConsumerBase(object):
         """
 
         try:
-            msg = rpc_common.deserialize_msg(message.payload)
-            callback(msg)
+            callback(RabbitMessage(message))
         except Exception:
             LOG.exception(_("Failed to process message"
                             " ... skipping it."))
-        message.ack()
+            message.ack()
 
     def consume(self, *args, **kwargs):
         """Actually declare the consumer on the amqp channel.  This will
@@ -408,8 +424,6 @@ class Connection(object):
 
     def __init__(self, conf, server_params=None):
         self.consumers = []
-        self.consumer_thread = None
-        self.proxy_callbacks = []
         self.conf = conf
         self.max_retries = self.conf.rabbit_max_retries
         # Try forever?
@@ -437,6 +451,7 @@ class Connection(object):
                 'port': port,
                 'userid': self.conf.rabbit_userid,
                 'password': self.conf.rabbit_password,
+                'login_method': self.conf.rabbit_login_method,
                 'virtual_host': self.conf.rabbit_virtual_host,
             }
 
@@ -453,11 +468,34 @@ class Connection(object):
 
         self.params_list = params_list
 
+        brokers_count = len(self.params_list)
+        self.next_broker_indices = itertools.cycle(range(brokers_count))
+
         self.memory_transport = self.conf.fake_rabbit
 
         self.connection = None
         self.do_consume = None
         self.reconnect()
+
+    # FIXME(markmc): use oslo sslutils when it is available as a library
+    _SSL_PROTOCOLS = {
+        "tlsv1": ssl.PROTOCOL_TLSv1,
+        "sslv23": ssl.PROTOCOL_SSLv23,
+        "sslv3": ssl.PROTOCOL_SSLv3
+    }
+
+    try:
+        _SSL_PROTOCOLS["sslv2"] = ssl.PROTOCOL_SSLv2
+    except AttributeError:
+        pass
+
+    @classmethod
+    def validate_ssl_version(cls, version):
+        key = version.lower()
+        try:
+            return cls._SSL_PROTOCOLS[key]
+        except KeyError:
+            raise RuntimeError(_("Invalid SSL version : %s") % version)
 
     def _fetch_ssl_params(self):
         """Handles fetching what ssl params should be used for the connection
@@ -467,7 +505,7 @@ class Connection(object):
 
         # http://docs.python.org/library/ssl.html - ssl.wrap_socket
         if self.conf.kombu_ssl_version:
-            ssl_params['ssl_version'] = sslutils.validate_ssl_version(
+            ssl_params['ssl_version'] = self.validate_ssl_version(
                 self.conf.kombu_ssl_version)
         if self.conf.kombu_ssl_keyfile:
             ssl_params['keyfile'] = self.conf.kombu_ssl_keyfile
@@ -491,6 +529,17 @@ class Connection(object):
             LOG.info(_("Reconnecting to AMQP server on "
                      "%(hostname)s:%(port)d") % params)
             try:
+                # XXX(nic): when reconnecting to a RabbitMQ cluster
+                # with mirrored queues in use, the attempt to release the
+                # connection can hang "indefinitely" somewhere deep down
+                # in Kombu.  Blocking the thread for a bit prior to
+                # release seems to kludge around the problem where it is
+                # otherwise reproduceable.
+                if self.conf.kombu_reconnect_delay > 0:
+                    LOG.info(_("Delaying reconnect for %1.1f seconds...") %
+                             self.conf.kombu_reconnect_delay)
+                    time.sleep(self.conf.kombu_reconnect_delay)
+
                 self.connection.release()
             except self.connection_errors:
                 pass
@@ -499,6 +548,7 @@ class Connection(object):
             self.connection = None
         self.connection = kombu.connection.BrokerConnection(**params)
         self.connection_errors = self.connection.connection_errors
+        self.channel_errors = self.connection.channel_errors
         if self.memory_transport:
             # Kludge to speed up tests.
             self.connection.transport.polling_interval = 0.0
@@ -525,14 +575,14 @@ class Connection(object):
 
         attempt = 0
         while True:
-            params = self.params_list[attempt % len(self.params_list)]
+            params = self.params_list[next(self.next_broker_indices)]
             attempt += 1
             try:
                 self._connect(params)
                 return
-            except IOError:
+            except IOError as e:
                 pass
-            except self.connection_errors:
+            except self.connection_errors as e:
                 pass
             except Exception as e:
                 # NOTE(comstud): Unfortunately it's possible for amqplib
@@ -576,6 +626,9 @@ class Connection(object):
             except self.connection_errors as e:
                 if error_callback:
                     error_callback(e)
+            except self.channel_errors as e:
+                if error_callback:
+                    error_callback(e)
             except (socket.timeout, IOError) as e:
                 if error_callback:
                     error_callback(e)
@@ -598,15 +651,11 @@ class Connection(object):
 
     def close(self):
         """Close/release this connection."""
-        self.cancel_consumer_thread()
-        self.wait_on_proxy_callbacks()
         self.connection.release()
         self.connection = None
 
     def reset(self):
         """Reset a connection so it can be used again."""
-        self.cancel_consumer_thread()
-        self.wait_on_proxy_callbacks()
         self.channel.close()
         self.channel = self.connection.channel()
         # work around 'memory' transport bug in 1.1.3
@@ -659,21 +708,6 @@ class Connection(object):
             if limit and iteration >= limit:
                 raise StopIteration
             yield self.ensure(_error_callback, _consume)
-
-    def cancel_consumer_thread(self):
-        """Cancel a consumer thread."""
-        if self.consumer_thread is not None:
-            self.consumer_thread.kill()
-            try:
-                self.consumer_thread.wait()
-            except greenlet.GreenletExit:
-                pass
-            self.consumer_thread = None
-
-    def wait_on_proxy_callbacks(self):
-        """Wait for all proxy callback threads to exit."""
-        for proxy_cb in self.proxy_callbacks:
-            proxy_cb.wait()
 
     def publisher_send(self, cls, topic, msg, timeout=None, **kwargs):
         """Send to a publisher based on the publisher class."""
@@ -734,18 +768,6 @@ class Connection(object):
             except StopIteration:
                 return
 
-    def consume_in_thread(self):
-        """Consumer from all queues/consumers in a greenthread."""
-        @excutils.forever_retry_uncaught_exceptions
-        def _consumer_thread():
-            try:
-                self.consume()
-            except greenlet.GreenletExit:
-                return
-        if self.consumer_thread is None:
-            self.consumer_thread = eventlet.spawn(_consumer_thread)
-        return self.consumer_thread
-
 
 class RabbitDriver(amqpdriver.AMQPDriverBase):
 
@@ -760,3 +782,6 @@ class RabbitDriver(amqpdriver.AMQPDriverBase):
                                            connection_pool,
                                            default_exchange,
                                            allowed_remote_exmods)
+
+    def require_features(self, requeue=True):
+        pass

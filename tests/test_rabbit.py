@@ -108,6 +108,11 @@ class TestRabbitTransportURL(test_utils.BaseTestCase):
         self._driver.listen(self._target)
         self.assertEqual(self._server_params[0], self.expected)
 
+    def test_transport_url_listen_for_notification(self):
+        self._driver.listen_for_notifications(
+            [(messaging.Target(topic='topic'), 'info')])
+        self.assertEqual(self._server_params[0], self.expected)
+
     def test_transport_url_send(self):
         self._driver.send(self._target, {}, {})
         self.assertEqual(self._server_params[0], self.expected)
@@ -603,3 +608,41 @@ class TestReplyWireFormat(test_utils.BaseTestCase):
 
 
 TestReplyWireFormat.generate_scenarios()
+
+
+class RpcKombuHATestCase(test_utils.BaseTestCase):
+
+    def test_reconnect_order(self):
+        brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
+        brokers_count = len(brokers)
+
+        self.conf.rabbit_hosts = brokers
+        self.conf.rabbit_max_retries = 1
+
+        info = {'attempt': 0}
+
+        def _connect(myself, params):
+            # do as little work that is enough to pass connection attempt
+            myself.connection = kombu.connection.BrokerConnection(**params)
+            myself.connection_errors = myself.connection.connection_errors
+
+            expected_broker = brokers[info['attempt'] % brokers_count]
+            self.assertEqual(params['hostname'], expected_broker)
+
+            info['attempt'] += 1
+
+        # just make sure connection instantiation does not fail with an
+        # exception
+        self.stubs.Set(rabbit_driver.Connection, '_connect', _connect)
+
+        # starting from the first broker in the list
+        connection = rabbit_driver.Connection(self.conf)
+
+        # now that we have connection object, revert to the real 'connect'
+        # implementation
+        self.stubs.UnsetAll()
+
+        for i in range(len(brokers)):
+            self.assertRaises(driver_common.RPCException, connection.reconnect)
+
+        connection.close()

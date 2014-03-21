@@ -31,11 +31,15 @@ LOG = logging.getLogger(__name__)
 
 class AMQPIncomingMessage(base.IncomingMessage):
 
-    def __init__(self, listener, ctxt, message, msg_id, reply_q):
-        super(AMQPIncomingMessage, self).__init__(listener, ctxt, message)
+    def __init__(self, listener, ctxt, message, unique_id, msg_id, reply_q):
+        super(AMQPIncomingMessage, self).__init__(listener, ctxt,
+                                                  dict(message))
 
+        self.unique_id = unique_id
         self.msg_id = msg_id
         self.reply_q = reply_q
+        self.acknowledge_callback = message.acknowledge
+        self.requeue_callback = message.requeue
 
     def _send_reply(self, conn, reply=None, failure=None,
                     ending=False, log_failure=True):
@@ -63,25 +67,39 @@ class AMQPIncomingMessage(base.IncomingMessage):
             self._send_reply(conn, reply, failure, log_failure=log_failure)
             self._send_reply(conn, ending=True)
 
+    def acknowledge(self):
+        self.listener.msg_id_cache.add(self.unique_id)
+        self.acknowledge_callback()
+
+    def requeue(self):
+        # NOTE(sileht): In case of the connection is lost between receiving the
+        # message and requeing it, this requeue call fail
+        # but because the message is not acknowledged and not added to the
+        # msg_id_cache, the message will be reconsumed, the only difference is
+        # the message stay at the beginning of the queue instead of moving to
+        # the end.
+        self.requeue_callback()
+
 
 class AMQPListener(base.Listener):
 
-    def __init__(self, driver, target, conn):
-        super(AMQPListener, self).__init__(driver, target)
+    def __init__(self, driver, conn):
+        super(AMQPListener, self).__init__(driver)
         self.conn = conn
         self.msg_id_cache = rpc_amqp._MsgIdCache()
         self.incoming = []
 
     def __call__(self, message):
         # FIXME(markmc): logging isn't driver specific
-        rpc_common._safe_log(LOG.debug, 'received %s', message)
+        rpc_common._safe_log(LOG.debug, 'received %s', dict(message))
 
-        self.msg_id_cache.check_duplicate_message(message)
+        unique_id = self.msg_id_cache.check_duplicate_message(message)
         ctxt = rpc_amqp.unpack_context(self.conf, message)
 
         self.incoming.append(AMQPIncomingMessage(self,
                                                  ctxt.to_dict(),
                                                  message,
+                                                 unique_id,
                                                  ctxt.msg_id,
                                                  ctxt.reply_q))
 
@@ -156,6 +174,7 @@ class ReplyWaiter(object):
         conn.declare_direct_consumer(reply_q, self)
 
     def __call__(self, message):
+        message.acknowledge()
         self.incoming.append(message)
 
     def listen(self, msg_id):
@@ -395,13 +414,23 @@ class AMQPDriverBase(base.BaseDriver):
     def listen(self, target):
         conn = self._get_connection(pooled=False)
 
-        listener = AMQPListener(self, target, conn)
+        listener = AMQPListener(self, conn)
 
         conn.declare_topic_consumer(target.topic, listener)
         conn.declare_topic_consumer('%s.%s' % (target.topic, target.server),
                                     listener)
         conn.declare_fanout_consumer(target.topic, listener)
 
+        return listener
+
+    def listen_for_notifications(self, targets_and_priorities):
+        conn = self._get_connection(pooled=False)
+
+        listener = AMQPListener(self, conn)
+        for target, priority in targets_and_priorities:
+            conn.declare_topic_consumer('%s.%s' % (target.topic, priority),
+                                        callback=listener,
+                                        exchange_name=target.exchange)
         return listener
 
     def cleanup(self):
