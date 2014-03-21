@@ -4,6 +4,7 @@ oslo.messaging (1.3.0~a9-2) experimental; urgency=medium
   * Standards-Version: is now 3.9.5.
   * Updated (build-)dependency.
   * Better usage of testr/subunit.
+  * Refreshed no-intersphinx.patch.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 21 Mar 2014 17:10:55 +0800
 
