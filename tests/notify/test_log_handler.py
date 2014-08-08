@@ -11,11 +11,12 @@
 # under the License.
 
 import logging
+
 import mock
 
 from oslo import messaging
 from oslo.messaging.notify import log_handler
-from tests import test_notifier
+from tests.notify import test_notifier
 from tests import utils as test_utils
 
 

@@ -45,7 +45,17 @@ class FakeListener(base.Listener):
         self._exchange_manager = exchange_manager
         self._targets = targets
 
-    def poll(self):
+        # NOTE(sileht): Ensure that all needed queues exists even the listener
+        # have not been polled yet
+        for target in self._targets:
+            exchange = self._exchange_manager.get_exchange(target.exchange)
+            exchange.ensure_queue(target)
+
+    def poll(self, timeout=None):
+        if timeout is not None:
+            deadline = time.time() + timeout
+        else:
+            deadline = None
         while True:
             for target in self._targets:
                 exchange = self._exchange_manager.get_exchange(target.exchange)
@@ -54,7 +64,15 @@ class FakeListener(base.Listener):
                     message = FakeIncomingMessage(self, ctxt, message,
                                                   reply_q, requeue)
                     return message
-            time.sleep(.05)
+            if deadline is not None:
+                pause = deadline - time.time()
+                if pause < 0:
+                    break
+                pause = min(pause, 0.050)
+            else:
+                pause = 0.050
+            time.sleep(pause)
+        return None
 
 
 class FakeExchange(object):
@@ -64,6 +82,13 @@ class FakeExchange(object):
         self._queues_lock = threading.RLock()
         self._topic_queues = {}
         self._server_queues = {}
+
+    def ensure_queue(self, target):
+        with self._queues_lock:
+            if target.server:
+                self._get_server_queue(target.topic, target.server)
+            else:
+                self._get_topic_queue(target.topic)
 
     def _get_topic_queue(self, topic):
         return self._topic_queues.setdefault(topic, [])
@@ -107,16 +132,16 @@ class FakeExchangeManager(object):
     def get_exchange(self, name):
         if name is None:
             name = self._default_exchange
-        while self._exchanges_lock:
+        with self._exchanges_lock:
             return self._exchanges.setdefault(name, FakeExchange(name))
 
 
 class FakeDriver(base.BaseDriver):
 
     def __init__(self, conf, url, default_exchange=None,
-                 allowed_remote_exmods=[]):
+                 allowed_remote_exmods=None):
         super(FakeDriver, self).__init__(conf, url, default_exchange,
-                                         allowed_remote_exmods=[])
+                                         allowed_remote_exmods)
 
         self._exchange_manager = FakeExchangeManager(default_exchange)
 
@@ -162,10 +187,15 @@ class FakeDriver(base.BaseDriver):
 
         return None
 
-    def send(self, target, ctxt, message, wait_for_reply=None, timeout=None):
+    def send(self, target, ctxt, message, wait_for_reply=None, timeout=None,
+             retry=None):
+        # NOTE(sileht): retry doesn't need to be implemented, the fake
+        # transport always works
         return self._send(target, ctxt, message, wait_for_reply, timeout)
 
-    def send_notification(self, target, ctxt, message, version):
+    def send_notification(self, target, ctxt, message, version, retry=None):
+        # NOTE(sileht): retry doesn't need to be implemented, the fake
+        # transport always works
         self._send(target, ctxt, message)
 
     def listen(self, target):

@@ -20,6 +20,7 @@ import uuid
 
 import fixtures
 import mock
+from stevedore import dispatch
 from stevedore import extension
 import testscenarios
 import yaml
@@ -27,7 +28,6 @@ import yaml
 from oslo import messaging
 from oslo.messaging.notify import _impl_log
 from oslo.messaging.notify import _impl_messaging
-from oslo.messaging.notify import _impl_routing as routing
 from oslo.messaging.notify import _impl_test
 from oslo.messaging.notify import notifier as msg_notifier
 from oslo.messaging.openstack.common import jsonutils
@@ -43,7 +43,7 @@ class _FakeTransport(object):
     def __init__(self, conf):
         self.conf = conf
 
-    def _send_notification(self, target, ctxt, message, version):
+    def _send_notification(self, target, ctxt, message, version, retry=None):
         pass
 
 
@@ -122,6 +122,13 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
         ('ctxt', dict(ctxt={'user': 'bob'})),
     ]
 
+    _retry = [
+        ('unconfigured', dict()),
+        ('None', dict(retry=None)),
+        ('0', dict(retry=0)),
+        ('5', dict(retry=5)),
+    ]
+
     @classmethod
     def generate_scenarios(cls):
         cls.scenarios = testscenarios.multiply_scenarios(cls._v1,
@@ -130,7 +137,8 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
                                                          cls._topics,
                                                          cls._priority,
                                                          cls._payload,
-                                                         cls._context)
+                                                         cls._context,
+                                                         cls._retry)
 
     def setUp(self):
         super(TestMessagingNotifier, self).setUp()
@@ -158,8 +166,13 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
         else:
             notifier = messaging.Notifier(transport)
 
+        prepare_kwds = {}
+        if hasattr(self, 'retry'):
+            prepare_kwds['retry'] = self.retry
         if hasattr(self, 'prep_pub_id'):
-            notifier = notifier.prepare(publisher_id=self.prep_pub_id)
+            prepare_kwds['publisher_id'] = self.prep_pub_id
+        if prepare_kwds:
+            notifier = notifier.prepare(**prepare_kwds)
 
         self.mox.StubOutWithMock(transport, '_send_notification')
 
@@ -186,6 +199,10 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
 
         for send_kwargs in sends:
             for topic in self.topics:
+                if hasattr(self, 'retry'):
+                    send_kwargs['retry'] = self.retry
+                else:
+                    send_kwargs['retry'] = None
                 target = messaging.Target(topic='%s.%s' % (topic,
                                                            self.priority))
                 transport._send_notification(target, self.ctxt, message,
@@ -243,8 +260,8 @@ class TestSerializer(test_utils.BaseTestCase):
             'timestamp': str(timeutils.utcnow()),
         }
 
-        self.assertEqual(_impl_test.NOTIFICATIONS,
-                         [(dict(user='alice'), message, 'INFO')])
+        self.assertEqual([(dict(user='alice'), message, 'INFO', None)],
+                         _impl_test.NOTIFICATIONS)
 
 
 class TestLogNotifier(test_utils.BaseTestCase):
@@ -298,13 +315,17 @@ class TestLogNotifier(test_utils.BaseTestCase):
         self.mox.ReplayAll()
 
         msg = {'event_type': 'foo'}
-        driver.notify(None, msg, "sample")
+        driver.notify(None, msg, "sample", None)
 
 
 class TestRoutingNotifier(test_utils.BaseTestCase):
     def setUp(self):
         super(TestRoutingNotifier, self).setUp()
-        self.router = routing.RoutingDriver(None, None, None)
+        self.config(notification_driver=['routing'])
+
+        transport = _FakeTransport(self.conf)
+        self.notifier = messaging.Notifier(transport)
+        self.router = self.notifier._driver_mgr['routing'].obj
 
     def _fake_extension_manager(self, ext):
         return extension.ExtensionManager.make_test_instance(
@@ -324,7 +345,7 @@ class TestRoutingNotifier(test_utils.BaseTestCase):
     def test_load_notifiers_no_config(self):
         # default routing_notifier_config=""
         self.router._load_notifiers()
-        self.assertEqual(self.router.routing_groups, {})
+        self.assertEqual({}, self.router.routing_groups)
         self.assertEqual(0, len(self.router.used_drivers))
 
     def test_load_notifiers_no_extensions(self):
@@ -341,7 +362,7 @@ class TestRoutingNotifier(test_utils.BaseTestCase):
                                 '_impl_routing.LOG') as mylog:
                     self.router._load_notifiers()
                     self.assertFalse(mylog.debug.called)
-        self.assertEqual(self.router.routing_groups, {})
+        self.assertEqual({}, self.router.routing_groups)
 
     def test_load_notifiers_config(self):
         self.config(routing_notifier_config="routing_notifier.yaml")
@@ -380,22 +401,22 @@ group_1:
         # No matching event ...
         self.assertEqual([],
                          self.router._get_drivers_for_message(
-                             group, "unknown", None))
+                             group, "unknown", "info"))
 
         # Child of foo ...
         self.assertEqual(['rpc'],
                          self.router._get_drivers_for_message(
-                             group, "foo.1", None))
+                             group, "foo.1", "info"))
 
         # Foo itself ...
         self.assertEqual([],
                          self.router._get_drivers_for_message(
-                             group, "foo", None))
+                             group, "foo", "info"))
 
         # Child of blah.zoo
         self.assertEqual(['rpc'],
                          self.router._get_drivers_for_message(
-                             group, "blah.zoo.zing", None))
+                             group, "blah.zoo.zing", "info"))
 
     def test_get_drivers_for_message_accepted_priorities(self):
         config = r"""
@@ -461,21 +482,58 @@ group_1:
         ext.name = "rpc"
 
         # Good ...
-        self.assertTrue(self.router._filter_func(ext, {}, {},
-                        ['foo', 'rpc']))
+        self.assertTrue(self.router._filter_func(ext, {}, {}, 'info',
+                        None, ['foo', 'rpc']))
 
         # Bad
-        self.assertFalse(self.router._filter_func(ext, {}, {}, ['foo']))
+        self.assertFalse(self.router._filter_func(ext, {}, {}, 'info',
+                                                  None, ['foo']))
 
     def test_notify(self):
         self.router.routing_groups = {'group_1': None, 'group_2': None}
-        message = {'event_type': 'my_event', 'priority': 'my_priority'}
-
         drivers_mock = mock.MagicMock()
         drivers_mock.side_effect = [['rpc'], ['foo']]
 
         with mock.patch.object(self.router, 'plugin_manager') as pm:
             with mock.patch.object(self.router, '_get_drivers_for_message',
                                    drivers_mock):
-                self.router.notify({}, message)
-                self.assertEqual(pm.map.call_args[0][4], ['rpc', 'foo'])
+                self.notifier.info({}, 'my_event', {})
+                self.assertEqual(['rpc', 'foo'], pm.map.call_args[0][6])
+
+    def test_notify_filtered(self):
+        self.config(routing_notifier_config="routing_notifier.yaml")
+        routing_config = r"""
+group_1:
+    rpc:
+        accepted_events:
+          - my_event
+    rpc2:
+        accepted_priorities:
+          - info
+    bar:
+        accepted_events:
+            - nothing
+        """
+        config_file = mock.MagicMock()
+        config_file.return_value = routing_config
+
+        rpc_driver = mock.Mock()
+        rpc2_driver = mock.Mock()
+        bar_driver = mock.Mock()
+
+        pm = dispatch.DispatchExtensionManager.make_test_instance(
+            [extension.Extension('rpc', None, None, rpc_driver),
+             extension.Extension('rpc2', None, None, rpc2_driver),
+             extension.Extension('bar', None, None, bar_driver)],
+        )
+
+        with mock.patch.object(self.router, '_get_notifier_config_file',
+                               config_file):
+            with mock.patch('stevedore.dispatch.DispatchExtensionManager',
+                            return_value=pm):
+                self.notifier.info({}, 'my_event', {})
+                self.assertFalse(bar_driver.info.called)
+                rpc_driver.notify.assert_called_once_with(
+                    {}, mock.ANY, 'INFO', None)
+                rpc2_driver.notify.assert_called_once_with(
+                    {}, mock.ANY, 'INFO', None)

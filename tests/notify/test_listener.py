@@ -16,9 +16,9 @@
 import threading
 
 import mock
-from oslo.config import cfg
 import testscenarios
 
+from oslo.config import cfg
 from oslo import messaging
 from oslo.messaging.notify import dispatcher
 from tests import utils as test_utils
@@ -33,9 +33,9 @@ class ListenerSetupMixin(object):
             self._expect_messages = expect_messages
             self._received_msgs = 0
             self._listener = messaging.get_notification_listener(
-                transport, targets, endpoints + [self], allow_requeue=True)
+                transport, targets, [self] + endpoints, allow_requeue=True)
 
-        def info(self, ctxt, publisher_id, event_type, payload):
+        def info(self, ctxt, publisher_id, event_type, payload, metadata):
             self._received_msgs += 1
             if self._expect_messages == self._received_msgs:
                 # Check start() does nothing with a running listener
@@ -61,6 +61,7 @@ class ListenerSetupMixin(object):
 
     def _stop_listener(self, thread):
         thread.join(timeout=5)
+        return thread.isAlive()
 
     def _setup_notifier(self, transport, topic='testtopic',
                         publisher_id='testpublisher'):
@@ -91,7 +92,7 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         self.assertIsInstance(listener.dispatcher,
                               dispatcher.NotificationDispatcher)
         self.assertIs(listener.dispatcher.endpoints, endpoints)
-        self.assertIs(listener.executor, 'blocking')
+        self.assertEqual('blocking', listener.executor)
 
     def test_no_target_topic(self):
         transport = messaging.get_transport(self.conf, url='fake:')
@@ -114,7 +115,7 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
                                                 executor='foo')
         except Exception as ex:
             self.assertIsInstance(ex, messaging.ExecutorLoadFailure)
-            self.assertEqual(ex.executor, 'foo')
+            self.assertEqual('foo', ex.executor)
         else:
             self.assertTrue(False)
 
@@ -128,7 +129,7 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         notifier = self._setup_notifier(transport)
         notifier.info({}, 'an_event.start', 'test message')
 
-        self._stop_listener(listener_thread)
+        self.assertFalse(self._stop_listener(listener_thread))
 
         endpoint.info.assert_called_once_with(
             {}, 'testpublisher', 'an_event.start', 'test message',
@@ -148,16 +149,16 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         notifier = self._setup_notifier(transport, topic='topic2')
         notifier.info({'ctxt': '2'}, 'an_event.start2', 'test')
 
-        self._stop_listener(listener_thread)
+        self.assertFalse(self._stop_listener(listener_thread))
 
-        expected = [mock.call({'ctxt': '1'}, 'testpublisher',
-                              'an_event.start1', 'test',
-                              {'timestamp': mock.ANY, 'message_id': mock.ANY}),
-                    mock.call({'ctxt': '2'}, 'testpublisher',
-                              'an_event.start2', 'test',
-                              {'timestamp': mock.ANY, 'message_id': mock.ANY})]
-
-        self.assertEqual(sorted(endpoint.info.call_args_list), expected)
+        endpoint.info.assert_has_calls([
+            mock.call({'ctxt': '1'}, 'testpublisher',
+                      'an_event.start1', 'test',
+                      {'timestamp': mock.ANY, 'message_id': mock.ANY}),
+            mock.call({'ctxt': '2'}, 'testpublisher',
+                      'an_event.start2', 'test',
+                      {'timestamp': mock.ANY, 'message_id': mock.ANY})],
+            any_order=True)
 
     def test_two_exchanges(self):
         transport = messaging.get_transport(self.conf, url='fake:')
@@ -168,16 +169,17 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
                                     exchange="exchange1"),
                    messaging.Target(topic="topic",
                                     exchange="exchange2")]
-        listener_thread = self._setup_listener(transport, [endpoint], 3,
+        listener_thread = self._setup_listener(transport, [endpoint], 2,
                                                targets=targets)
 
         notifier = self._setup_notifier(transport, topic="topic")
 
         def mock_notifier_exchange(name):
-            def side_effect(target, ctxt, message, version):
+            def side_effect(target, ctxt, message, version, retry):
                 target.exchange = name
                 return transport._driver.send_notification(target, ctxt,
-                                                           message, version)
+                                                           message, version,
+                                                           retry=retry)
             transport._send_notification = mock.MagicMock(
                 side_effect=side_effect)
 
@@ -190,15 +192,16 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         notifier.info({'ctxt': '2'},
                       'an_event.start', 'test message exchange2')
 
-        self._stop_listener(listener_thread)
+        self.assertFalse(self._stop_listener(listener_thread))
 
-        expected = [mock.call({'ctxt': '1'}, 'testpublisher', 'an_event.start',
-                              'test message exchange1',
-                              {'timestamp': mock.ANY, 'message_id': mock.ANY}),
-                    mock.call({'ctxt': '2'}, 'testpublisher', 'an_event.start',
-                              'test message exchange2',
-                              {'timestamp': mock.ANY, 'message_id': mock.ANY})]
-        self.assertEqual(sorted(endpoint.info.call_args_list), expected)
+        endpoint.info.assert_has_calls([
+            mock.call({'ctxt': '1'}, 'testpublisher', 'an_event.start',
+                      'test message exchange1',
+                      {'timestamp': mock.ANY, 'message_id': mock.ANY}),
+            mock.call({'ctxt': '2'}, 'testpublisher', 'an_event.start',
+                      'test message exchange2',
+                      {'timestamp': mock.ANY, 'message_id': mock.ANY})],
+            any_order=True)
 
     def test_two_endpoints(self):
         transport = messaging.get_transport(self.conf, url='fake:')
@@ -212,7 +215,7 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         notifier = self._setup_notifier(transport)
         notifier.info({}, 'an_event.start', 'test')
 
-        self._stop_listener(listener_thread)
+        self.assertFalse(self._stop_listener(listener_thread))
 
         endpoint1.info.assert_called_once_with(
             {}, 'testpublisher', 'an_event.start', 'test', {
@@ -240,10 +243,10 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         notifier = self._setup_notifier(transport)
         notifier.info({}, 'an_event.start', 'test')
 
-        self._stop_listener(listener_thread)
+        self.assertFalse(self._stop_listener(listener_thread))
 
-        expected = [mock.call({}, 'testpublisher', 'an_event.start', 'test',
-                              {'timestamp': mock.ANY, 'message_id': mock.ANY}),
-                    mock.call({}, 'testpublisher', 'an_event.start', 'test',
-                              {'timestamp': mock.ANY, 'message_id': mock.ANY})]
-        self.assertEqual(endpoint.info.call_args_list, expected)
+        endpoint.info.assert_has_calls([
+            mock.call({}, 'testpublisher', 'an_event.start', 'test',
+                      {'timestamp': mock.ANY, 'message_id': mock.ANY}),
+            mock.call({}, 'testpublisher', 'an_event.start', 'test',
+                      {'timestamp': mock.ANY, 'message_id': mock.ANY})])

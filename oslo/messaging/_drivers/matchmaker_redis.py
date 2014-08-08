@@ -17,7 +17,6 @@ return keys for direct exchanges, per (approximate) AMQP parlance.
 """
 
 from oslo.config import cfg
-
 from oslo.messaging._drivers import matchmaker as mm_common
 from oslo.messaging.openstack.common import importutils
 
@@ -32,7 +31,6 @@ matchmaker_redis_opts = [
                default=6379,
                help='Use this port to connect to redis host.'),
     cfg.StrOpt('password',
-               default=None,
                help='Password for Redis server (optional).'),
 ]
 

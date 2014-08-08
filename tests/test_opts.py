@@ -22,15 +22,15 @@ from tests import utils as test_utils
 class OptsTestCase(test_utils.BaseTestCase):
 
     def _test_list_opts(self, result):
-        self.assertEqual(2, len(result))
+        self.assertEqual(3, len(result))
 
         groups = [g for (g, l) in result]
         self.assertIn(None, groups)
         self.assertIn('matchmaker_ring', groups)
+        self.assertIn('matchmaker_redis', groups)
 
         opt_names = [o.name for (g, l) in result for o in l]
         self.assertIn('rpc_backend', opt_names)
-        self.assertIn('allowed_rpc_exception_modules', opt_names)
 
     def test_list_opts(self):
         self._test_list_opts(opts.list_opts())

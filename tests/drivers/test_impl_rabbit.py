@@ -13,12 +13,14 @@
 #    under the License.
 
 import datetime
+import operator
 import sys
 import threading
 import uuid
 
 import fixtures
 import kombu
+import mock
 import testscenarios
 
 from oslo import messaging
@@ -46,74 +48,88 @@ class TestRabbitDriverLoad(test_utils.BaseTestCase):
 class TestRabbitTransportURL(test_utils.BaseTestCase):
 
     scenarios = [
-        ('none', dict(url=None, expected=None)),
+        ('none', dict(url=None,
+                      expected=[dict(hostname='localhost',
+                                     port=5672,
+                                     userid='guest',
+                                     password='guest',
+                                     virtual_host='/')])),
         ('empty',
          dict(url='rabbit:///',
-              expected=dict(virtual_host=''))),
+              expected=[dict(hostname='localhost',
+                             port=5672,
+                             userid='guest',
+                             password='guest',
+                             virtual_host='')])),
         ('localhost',
          dict(url='rabbit://localhost/',
-              expected=dict(hostname='localhost',
-                            username='',
-                            password='',
-                            virtual_host=''))),
+              expected=[dict(hostname='localhost',
+                             port=5672,
+                             userid='',
+                             password='',
+                             virtual_host='')])),
         ('virtual_host',
          dict(url='rabbit:///vhost',
-              expected=dict(virtual_host='vhost'))),
+              expected=[dict(hostname='localhost',
+                             port=5672,
+                             userid='guest',
+                             password='guest',
+                             virtual_host='vhost')])),
         ('no_creds',
          dict(url='rabbit://host/virtual_host',
-              expected=dict(hostname='host',
-                            username='',
-                            password='',
-                            virtual_host='virtual_host'))),
+              expected=[dict(hostname='host',
+                             port=5672,
+                             userid='',
+                             password='',
+                             virtual_host='virtual_host')])),
         ('no_port',
          dict(url='rabbit://user:password@host/virtual_host',
-              expected=dict(hostname='host',
-                            username='user',
-                            password='password',
-                            virtual_host='virtual_host'))),
+              expected=[dict(hostname='host',
+                             port=5672,
+                             userid='user',
+                             password='password',
+                             virtual_host='virtual_host')])),
         ('full_url',
          dict(url='rabbit://user:password@host:10/virtual_host',
-              expected=dict(hostname='host',
-                            port=10,
-                            username='user',
-                            password='password',
-                            virtual_host='virtual_host'))),
+              expected=[dict(hostname='host',
+                             port=10,
+                             userid='user',
+                             password='password',
+                             virtual_host='virtual_host')])),
+        ('full_two_url',
+         dict(url='rabbit://user:password@host:10,'
+              'user2:password2@host2:12/virtual_host',
+              expected=[dict(hostname='host',
+                             port=10,
+                             userid='user',
+                             password='password',
+                             virtual_host='virtual_host'),
+                        dict(hostname='host2',
+                             port=12,
+                             userid='user2',
+                             password='password2',
+                             virtual_host='virtual_host')
+                        ]
+              )),
+
     ]
 
-    def setUp(self):
-        super(TestRabbitTransportURL, self).setUp()
-
-        self.messaging_conf.transport_driver = 'rabbit'
+    def test_transport_url(self):
         self.messaging_conf.in_memory = True
 
-        self._server_params = []
-        cnx_init = rabbit_driver.Connection.__init__
+        transport = messaging.get_transport(self.conf, self.url)
+        self.addCleanup(transport.cleanup)
+        driver = transport._driver
 
-        def record_params(cnx, conf, server_params=None):
-            self._server_params.append(server_params)
-            return cnx_init(cnx, conf, server_params)
+        brokers_params = driver._get_connection().brokers_params[:]
+        brokers_params = [dict((k, v) for k, v in broker.items()
+                               if k not in ['transport', 'login_method'])
+                          for broker in brokers_params]
 
-        def dummy_send(cnx, topic, msg, timeout=None):
-            pass
-
-        self.stubs.Set(rabbit_driver.Connection, '__init__', record_params)
-        self.stubs.Set(rabbit_driver.Connection, 'topic_send', dummy_send)
-
-        self._driver = messaging.get_transport(self.conf, self.url)._driver
-        self._target = messaging.Target(topic='testtopic')
-
-    def test_transport_url_listen(self):
-        self._driver.listen(self._target)
-        self.assertEqual(self._server_params[0], self.expected)
-
-    def test_transport_url_listen_for_notification(self):
-        self._driver.listen_for_notifications(
-            [(messaging.Target(topic='topic'), 'info')])
-        self.assertEqual(self._server_params[0], self.expected)
-
-    def test_transport_url_send(self):
-        self._driver.send(self._target, {}, {})
-        self.assertEqual(self._server_params[0], self.expected)
+        self.assertEqual(sorted(self.expected,
+                                key=operator.itemgetter('hostname')),
+                         sorted(brokers_params,
+                                key=operator.itemgetter('hostname')))
 
 
 class TestSendReceive(test_utils.BaseTestCase):
@@ -205,8 +221,8 @@ class TestSendReceive(test_utils.BaseTestCase):
 
             received = listener.poll()
             self.assertIsNotNone(received)
-            self.assertEqual(received.ctxt, self.ctxt)
-            self.assertEqual(received.message, {'tx_id': i})
+            self.assertEqual(self.ctxt, received.ctxt)
+            self.assertEqual({'tx_id': i}, received.message)
             msgs.append(received)
 
         # reply in reverse, except reply to the first guy second from last
@@ -229,24 +245,41 @@ class TestSendReceive(test_utils.BaseTestCase):
                     msgs[i].reply(self.reply)
             senders[i].join()
 
-        self.assertEqual(len(replies), len(senders))
+        self.assertEqual(len(senders), len(replies))
         for i, reply in enumerate(replies):
             if self.timeout is not None:
                 self.assertIsInstance(reply, messaging.MessagingTimeout)
             elif self.failure:
                 self.assertIsInstance(reply, ZeroDivisionError)
             elif self.rx_id:
-                self.assertEqual(reply, {'rx_id': order[i]})
+                self.assertEqual({'rx_id': order[i]}, reply)
             else:
-                self.assertEqual(reply, self.reply)
+                self.assertEqual(self.reply, reply)
 
         if not self.timeout and self.failure and not self.expected:
             self.assertTrue(len(errors) > 0, errors)
         else:
-            self.assertEqual(len(errors), 0, errors)
+            self.assertEqual(0, len(errors), errors)
 
 
 TestSendReceive.generate_scenarios()
+
+
+class TestPollAsync(test_utils.BaseTestCase):
+
+    def setUp(self):
+        super(TestPollAsync, self).setUp()
+        self.messaging_conf.transport_driver = 'rabbit'
+        self.messaging_conf.in_memory = True
+
+    def test_poll_timeout(self):
+        transport = messaging.get_transport(self.conf)
+        self.addCleanup(transport.cleanup)
+        driver = transport._driver
+        target = messaging.Target(topic='testtopic')
+        listener = driver.listen(target)
+        received = listener.poll(timeout=0.050)
+        self.assertIsNone(received)
 
 
 class TestRacyWaitForReply(test_utils.BaseTestCase):
@@ -275,8 +308,11 @@ class TestRacyWaitForReply(test_utils.BaseTestCase):
 
         def reply_waiter(self, msg_id, timeout):
             if wait_conditions:
-                with wait_conditions[0]:
-                    wait_conditions.pop().wait()
+                cond = wait_conditions.pop()
+                with cond:
+                    cond.notify()
+                with cond:
+                    cond.wait()
             return orig_reply_waiter(self, msg_id, timeout)
 
         self.stubs.Set(amqpdriver.ReplyWaiter, 'wait', reply_waiter)
@@ -297,16 +333,18 @@ class TestRacyWaitForReply(test_utils.BaseTestCase):
         # Start the first guy, receive his message, but delay his polling
         notify_condition = threading.Condition()
         wait_conditions.append(notify_condition)
-        senders[0].start()
+        with notify_condition:
+            senders[0].start()
+            notify_condition.wait()
 
         msgs.append(listener.poll())
-        self.assertEqual(msgs[-1].message, {'tx_id': 0})
+        self.assertEqual({'tx_id': 0}, msgs[-1].message)
 
         # Start the second guy, receive his message
         senders[1].start()
 
         msgs.append(listener.poll())
-        self.assertEqual(msgs[-1].message, {'tx_id': 1})
+        self.assertEqual({'tx_id': 1}, msgs[-1].message)
 
         # Reply to both in order, making the second thread queue
         # the reply meant for the first thread
@@ -324,9 +362,9 @@ class TestRacyWaitForReply(test_utils.BaseTestCase):
         senders[0].join()
 
         # Verify replies were received out of order
-        self.assertEqual(len(replies), len(senders))
-        self.assertEqual(replies[0], {'rx_id': 1})
-        self.assertEqual(replies[1], {'rx_id': 0})
+        self.assertEqual(len(senders), len(replies))
+        self.assertEqual({'rx_id': 1}, replies[0])
+        self.assertEqual({'rx_id': 0}, replies[1])
 
 
 def _declare_queue(target):
@@ -610,37 +648,67 @@ TestReplyWireFormat.generate_scenarios()
 
 class RpcKombuHATestCase(test_utils.BaseTestCase):
 
-    def test_reconnect_order(self):
-        brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
-        brokers_count = len(brokers)
+    def setUp(self):
+        super(RpcKombuHATestCase, self).setUp()
+        self.brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
+        self.config(rabbit_hosts=self.brokers)
 
-        self.conf.rabbit_hosts = brokers
-        self.conf.rabbit_max_retries = 1
-
-        info = {'attempt': 0}
+        hostname_sets = set()
+        self.info = {'attempt': 0,
+                     'fail': False}
 
         def _connect(myself, params):
             # do as little work that is enough to pass connection attempt
             myself.connection = kombu.connection.BrokerConnection(**params)
             myself.connection_errors = myself.connection.connection_errors
 
-            expected_broker = brokers[info['attempt'] % brokers_count]
-            self.assertEqual(params['hostname'], expected_broker)
+            hostname = params['hostname']
+            self.assertNotIn(hostname, hostname_sets)
+            hostname_sets.add(hostname)
 
-            info['attempt'] += 1
+            self.info['attempt'] += 1
+            if self.info['fail']:
+                raise IOError('fake fail')
 
         # just make sure connection instantiation does not fail with an
         # exception
         self.stubs.Set(rabbit_driver.Connection, '_connect', _connect)
 
         # starting from the first broker in the list
-        connection = rabbit_driver.Connection(self.conf)
+        url = messaging.TransportURL.parse(self.conf, None)
+        self.connection = rabbit_driver.Connection(self.conf, url)
+        self.addCleanup(self.connection.close)
 
-        # now that we have connection object, revert to the real 'connect'
-        # implementation
-        self.stubs.UnsetAll()
+        self.info.update({'attempt': 0,
+                          'fail': True})
+        hostname_sets.clear()
 
-        for i in range(len(brokers)):
-            self.assertRaises(driver_common.RPCException, connection.reconnect)
+    def test_reconnect_order(self):
+        self.assertRaises(messaging.MessageDeliveryFailure,
+                          self.connection.reconnect,
+                          retry=len(self.brokers) - 1)
+        self.assertEqual(len(self.brokers), self.info['attempt'])
 
-        connection.close()
+    def test_ensure_four_retry(self):
+        mock_callback = mock.Mock(side_effect=IOError)
+        self.assertRaises(messaging.MessageDeliveryFailure,
+                          self.connection.ensure, None, mock_callback,
+                          retry=4)
+        self.assertEqual(5, self.info['attempt'])
+        self.assertEqual(1, mock_callback.call_count)
+
+    def test_ensure_one_retry(self):
+        mock_callback = mock.Mock(side_effect=IOError)
+        self.assertRaises(messaging.MessageDeliveryFailure,
+                          self.connection.ensure, None, mock_callback,
+                          retry=1)
+        self.assertEqual(2, self.info['attempt'])
+        self.assertEqual(1, mock_callback.call_count)
+
+    def test_ensure_no_retry(self):
+        mock_callback = mock.Mock(side_effect=IOError)
+        self.assertRaises(messaging.MessageDeliveryFailure,
+                          self.connection.ensure, None, mock_callback,
+                          retry=0)
+        self.assertEqual(1, self.info['attempt'])
+        self.assertEqual(1, mock_callback.call_count)
