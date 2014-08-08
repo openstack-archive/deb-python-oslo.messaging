@@ -1,6 +1,7 @@
 oslo.messaging (1.4.0.0~a4-1) unstable; urgency=medium
 
   * New upstream release.
+  * Updated required version for python{3,}-six.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 08 Aug 2014 19:09:30 +0800
 
