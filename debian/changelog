@@ -4,6 +4,7 @@ oslo.messaging (1.4.0.0-1) experimental; urgency=medium
   * Note that this really is 1.4.0, though because of previous upload to
     Debian using 1.4.0.0~a4 (which should have been 1.4.0~a4), then we do need
     to use that version number.
+  * Updated (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 21 Sep 2014 22:26:34 +0800
 
