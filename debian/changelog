@@ -1,3 +1,10 @@
+oslo.messaging (1.4.0.0-2) experimental; urgency=medium
+
+  * Uploading to experimental. Version 1.4 should never have been uploaded
+    to unstable, so repairing this.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 21 Sep 2014 16:01:44 +0000
+
 oslo.messaging (1.4.0.0-1) unstable; urgency=medium
 
   * New upstream release.
