@@ -32,10 +32,8 @@ from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
 from oslo.messaging._drivers import common as rpc_common
 from oslo.messaging import exceptions
-from oslo.messaging.openstack.common import network_utils
-
-# FIXME(markmc): remove this
-_ = lambda s: s
+from oslo.messaging.openstack.common.gettextutils import _
+from oslo.utils import netutils
 
 rabbit_opts = [
     cfg.StrOpt('kombu_ssl_version',
@@ -464,7 +462,7 @@ class Connection(object):
         else:
             # Old configuration format
             for adr in self.conf.rabbit_hosts:
-                hostname, port = network_utils.parse_host_port(
+                hostname, port = netutils.parse_host_port(
                     adr, default_port=self.conf.rabbit_port)
 
                 params = {
@@ -606,11 +604,11 @@ class Connection(object):
             try:
                 self._connect(broker)
                 return
-            except IOError as e:
-                pass
-            except self.connection_errors as e:
-                pass
-            except Exception as e:
+            except IOError as ex:
+                e = ex
+            except self.connection_errors as ex:
+                e = ex
+            except Exception as ex:
                 # NOTE(comstud): Unfortunately it's possible for amqplib
                 # to return an error not covered by its transport
                 # connection_errors in the case of a timeout waiting for
@@ -619,6 +617,7 @@ class Connection(object):
                 # and try to reconnect in this case.
                 if 'timeout' not in six.text_type(e):
                     raise
+                e = ex
 
             log_info = {}
             log_info['err_str'] = e

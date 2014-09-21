@@ -14,13 +14,17 @@
 
 import operator
 import random
-import thread
 import threading
 import time
 
 import mock
-import qpid
+try:
+    import qpid
+except ImportError:
+    qpid = None
+from six.moves import _thread
 import testscenarios
+import testtools
 
 from oslo import messaging
 from oslo.messaging._drivers import impl_qpid as qpid_driver
@@ -63,6 +67,7 @@ def _is_qpidd_service_running():
 
 class _QpidBaseTestCase(test_utils.BaseTestCase):
 
+    @testtools.skipIf(qpid is None, "qpid not available")
     def setUp(self):
         super(_QpidBaseTestCase, self).setUp()
         self.messaging_conf.transport_driver = 'qpid'
@@ -368,7 +373,7 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
             msgcontent = msg
 
         splitmsg = msgcontent.split('-')
-        key = thread.get_ident()
+        key = _thread.get_ident()
 
         if key not in self._messages:
             self._messages[key] = dict()
@@ -544,6 +549,7 @@ class TestQpidReconnectOrder(test_utils.BaseTestCase):
     """Unit Test cases to test reconnection
     """
 
+    @testtools.skipIf(qpid is None, "qpid not available")
     def test_reconnect_order(self):
         brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
         brokers_count = len(brokers)
@@ -764,6 +770,7 @@ def get_fake_qpid_session():
 
 class QPidHATestCase(test_utils.BaseTestCase):
 
+    @testtools.skipIf(qpid is None, "qpid not available")
     def setUp(self):
         super(QPidHATestCase, self).setUp()
         self.brokers = ['host1', 'host2', 'host3', 'host4', 'host5']

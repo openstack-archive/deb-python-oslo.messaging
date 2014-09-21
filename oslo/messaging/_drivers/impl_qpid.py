@@ -26,12 +26,10 @@ from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
 from oslo.messaging._drivers import common as rpc_common
 from oslo.messaging import exceptions
-from oslo.messaging.openstack.common import importutils
+from oslo.messaging.openstack.common.gettextutils import _
 from oslo.messaging.openstack.common import jsonutils
-from oslo.messaging.openstack.common import network_utils
-
-# FIXME(markmc): remove this
-_ = lambda s: s
+from oslo.utils import importutils
+from oslo.utils import netutils
 
 qpid_codec = importutils.try_import("qpid.codec010")
 qpid_messaging = importutils.try_import("qpid.messaging")
@@ -69,6 +67,9 @@ qpid_opts = [
     cfg.BoolOpt('qpid_tcp_nodelay',
                 default=True,
                 help='Whether to disable the Nagle algorithm.'),
+    cfg.IntOpt('qpid_receiver_capacity',
+               default=1,
+               help='The number of prefetched messages held by receiver.'),
     # NOTE(russellb) If any additional versions are added (beyond 1 and 2),
     # this file could probably use some additional refactoring so that the
     # differences between each version are split into different classes.
@@ -125,6 +126,7 @@ class ConsumerBase(object):
         """
         self.callback = callback
         self.receiver = None
+        self.rcv_capacity = conf.qpid_receiver_capacity
         self.session = None
 
         if conf.qpid_topology_version == 1:
@@ -178,7 +180,7 @@ class ConsumerBase(object):
     def _declare_receiver(self, session):
         self.session = session
         self.receiver = session.receiver(self.address)
-        self.receiver.capacity = 1
+        self.receiver.capacity = self.rcv_capacity
 
     def _unpack_json_msg(self, msg):
         """Load the JSON data in msg if msg.content_type indicates that it
@@ -473,7 +475,7 @@ class Connection(object):
         else:
             # Old configuration format
             for adr in self.conf.qpid_hosts:
-                hostname, port = network_utils.parse_host_port(
+                hostname, port = netutils.parse_host_port(
                     adr, default_port=5672)
 
                 params = {

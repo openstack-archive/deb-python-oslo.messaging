@@ -31,8 +31,8 @@ from oslo.messaging.notify import _impl_messaging
 from oslo.messaging.notify import _impl_test
 from oslo.messaging.notify import notifier as msg_notifier
 from oslo.messaging.openstack.common import jsonutils
-from oslo.messaging.openstack.common import timeutils
 from oslo.messaging import serializer as msg_serializer
+from oslo.utils import timeutils
 from tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
@@ -147,7 +147,7 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
         self.stubs.Set(_impl_messaging, 'LOG', self.logger)
         self.stubs.Set(msg_notifier, '_LOG', self.logger)
 
-    @mock.patch('oslo.messaging.openstack.common.timeutils.utcnow')
+    @mock.patch('oslo.utils.timeutils.utcnow')
     def test_notifier(self, mock_utcnow):
         drivers = []
         if self.v1:
@@ -223,7 +223,7 @@ class TestSerializer(test_utils.BaseTestCase):
         super(TestSerializer, self).setUp()
         self.addCleanup(_impl_test.reset)
 
-    @mock.patch('oslo.messaging.openstack.common.timeutils.utcnow')
+    @mock.patch('oslo.utils.timeutils.utcnow')
     def test_serializer(self, mock_utcnow):
         transport = _FakeTransport(self.conf)
 
@@ -266,7 +266,7 @@ class TestSerializer(test_utils.BaseTestCase):
 
 class TestLogNotifier(test_utils.BaseTestCase):
 
-    @mock.patch('oslo.messaging.openstack.common.timeutils.utcnow')
+    @mock.patch('oslo.utils.timeutils.utcnow')
     def test_notifier(self, mock_utcnow):
         self.config(notification_driver=['log'])
 
@@ -382,7 +382,7 @@ group_2:
                             return_value=self._fake_extension_manager(
                                 mock.MagicMock())):
                 self.router._load_notifiers()
-                groups = self.router.routing_groups.keys()
+                groups = list(self.router.routing_groups.keys())
                 groups.sort()
                 self.assertEqual(['group_1', 'group_2'], groups)
 
@@ -498,7 +498,8 @@ group_1:
             with mock.patch.object(self.router, '_get_drivers_for_message',
                                    drivers_mock):
                 self.notifier.info({}, 'my_event', {})
-                self.assertEqual(['rpc', 'foo'], pm.map.call_args[0][6])
+                self.assertEqual(sorted(['rpc', 'foo']),
+                                 sorted(pm.map.call_args[0][6]))
 
     def test_notify_filtered(self):
         self.config(routing_notifier_config="routing_notifier.yaml")
