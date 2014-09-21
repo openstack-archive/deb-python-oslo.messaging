@@ -53,22 +53,19 @@ class Listener(object):
         self.driver = driver
 
     @abc.abstractmethod
-    def poll(self, timeout=None):
-        """Blocking until a message is pending and return IncomingMessage.
-        Return None after timeout seconds if timeout is set and no message is
-        ending.
-        """
+    def poll(self):
+        "Blocking until a message is pending and return IncomingMessage."
 
 
 @six.add_metaclass(abc.ABCMeta)
 class BaseDriver(object):
 
     def __init__(self, conf, url,
-                 default_exchange=None, allowed_remote_exmods=None):
+                 default_exchange=None, allowed_remote_exmods=[]):
         self.conf = conf
         self._url = url
         self._default_exchange = default_exchange
-        self._allowed_remote_exmods = allowed_remote_exmods or []
+        self._allowed_remote_exmods = allowed_remote_exmods
 
     def require_features(self, requeue=False):
         if requeue:

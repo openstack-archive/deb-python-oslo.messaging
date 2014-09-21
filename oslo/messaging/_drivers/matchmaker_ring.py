@@ -21,8 +21,11 @@ import json
 import logging
 
 from oslo.config import cfg
+
 from oslo.messaging._drivers import matchmaker as mm
-from oslo.messaging.openstack.common.gettextutils import _
+
+# FIXME(markmc): remove this
+_ = lambda s: s
 
 matchmaker_opts = [
     # Matchmaker ring file
@@ -71,7 +74,7 @@ class RoundRobinRingExchange(RingExchange):
         if not self._ring_has(key):
             LOG.warn(
                 _("No key defining hosts for topic '%s', "
-                  "see ringfile"), key
+                  "see ringfile") % (key, )
             )
             return []
         host = next(self.ring0[key])
@@ -89,7 +92,7 @@ class FanoutRingExchange(RingExchange):
         if not self._ring_has(nkey):
             LOG.warn(
                 _("No key defining hosts for topic '%s', "
-                  "see ringfile"), nkey
+                  "see ringfile") % (nkey, )
             )
             return []
         return map(lambda x: (key + '.' + x, x), self.ring[nkey])

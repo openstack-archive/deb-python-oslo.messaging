@@ -27,8 +27,8 @@ import testscenarios
 import testtools
 
 from oslo import messaging
-from oslo.utils import timeutils
-from tests.notify import test_notifier
+from oslo.messaging.openstack.common import timeutils
+from tests import test_notifier
 from tests import utils as test_utils
 
 
@@ -63,7 +63,7 @@ class TestLogNotifier(test_utils.BaseTestCase):
         self.addCleanup(messaging.notify._impl_test.reset)
         self.config(notification_driver=['test'])
 
-    @mock.patch('oslo.utils.timeutils.utcnow')
+    @mock.patch('oslo.messaging.openstack.common.timeutils.utcnow')
     def test_logger(self, mock_utcnow):
         with mock.patch('oslo.messaging.transport.get_transport',
                         return_value=test_notifier._FakeTransport(self.conf)):
@@ -84,12 +84,13 @@ class TestLogNotifier(test_utils.BaseTestCase):
         self.logger.emit(record)
 
         n = messaging.notify._impl_test.NOTIFICATIONS[0][1]
-        self.assertEqual(getattr(self, 'queue', self.priority.upper()),
-                         n['priority'])
-        self.assertEqual('logrecord', n['event_type'])
-        self.assertEqual(str(timeutils.utcnow()), n['timestamp'])
-        self.assertEqual(None, n['publisher_id'])
+        self.assertEqual(n['priority'],
+                         getattr(self, 'queue', self.priority.upper()))
+        self.assertEqual(n['event_type'], 'logrecord')
+        self.assertEqual(n['timestamp'], str(timeutils.utcnow()))
+        self.assertEqual(n['publisher_id'], None)
         self.assertEqual(
+            n['payload'],
             {'process': os.getpid(),
              'funcName': None,
              'name': 'foo',
@@ -101,12 +102,11 @@ class TestLogNotifier(test_utils.BaseTestCase):
              'msg': 'Something happened',
              'exc_info': None,
              'levelname': logging.getLevelName(levelno),
-             'extra': None},
-            n['payload'])
+             'extra': None})
 
     @testtools.skipUnless(hasattr(logging.config, 'dictConfig'),
                           "Need logging.config.dictConfig (Python >= 2.7)")
-    @mock.patch('oslo.utils.timeutils.utcnow')
+    @mock.patch('oslo.messaging.openstack.common.timeutils.utcnow')
     def test_logging_conf(self, mock_utcnow):
         with mock.patch('oslo.messaging.transport.get_transport',
                         return_value=test_notifier._FakeTransport(self.conf)):
@@ -136,11 +136,11 @@ class TestLogNotifier(test_utils.BaseTestCase):
         logger.log(levelno, 'foobar')
 
         n = messaging.notify._impl_test.NOTIFICATIONS[0][1]
-        self.assertEqual(getattr(self, 'queue', self.priority.upper()),
-                         n['priority'])
-        self.assertEqual('logrecord', n['event_type'])
-        self.assertEqual(str(timeutils.utcnow()), n['timestamp'])
-        self.assertEqual(None, n['publisher_id'])
+        self.assertEqual(n['priority'],
+                         getattr(self, 'queue', self.priority.upper()))
+        self.assertEqual(n['event_type'], 'logrecord')
+        self.assertEqual(n['timestamp'], str(timeutils.utcnow()))
+        self.assertEqual(n['publisher_id'], None)
         pathname = __file__
         if pathname.endswith(('.pyc', '.pyo')):
             pathname = pathname[:-1]

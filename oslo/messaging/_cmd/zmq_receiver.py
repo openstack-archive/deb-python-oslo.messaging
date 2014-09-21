@@ -22,6 +22,7 @@ import logging
 import sys
 
 from oslo.config import cfg
+
 from oslo.messaging._drivers import impl_zmq
 from oslo.messaging._executors import impl_eventlet  # FIXME(markmc)
 

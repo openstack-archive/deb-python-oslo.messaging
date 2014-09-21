@@ -28,11 +28,14 @@ import logging
 import threading
 import uuid
 
+from oslo.config import cfg
 import six
 
-from oslo.config import cfg
 from oslo.messaging._drivers import common as rpc_common
 from oslo.messaging._drivers import pool
+
+# FIXME(markmc): remove this
+_ = lambda s: s
 
 amqp_opts = [
     cfg.BoolOpt('amqp_durable_queues',
@@ -56,17 +59,16 @@ LOG = logging.getLogger(__name__)
 
 class ConnectionPool(pool.Pool):
     """Class that implements a Pool of Connections."""
-    def __init__(self, conf, url, connection_cls):
+    def __init__(self, conf, connection_cls):
         self.connection_cls = connection_cls
         self.conf = conf
-        self.url = url
         super(ConnectionPool, self).__init__(self.conf.rpc_conn_pool_size)
         self.reply_proxy = None
 
     # TODO(comstud): Timeout connections not used in a while
     def create(self):
-        LOG.debug('Pool creating new connection')
-        return self.connection_cls(self.conf, self.url)
+        LOG.debug(_('Pool creating new connection'))
+        return self.connection_cls(self.conf)
 
     def empty(self):
         for item in self.iter_free():
@@ -80,19 +82,18 @@ class ConnectionPool(pool.Pool):
         # time code, it gets here via cleanup() and only appears in service.py
         # just before doing a sys.exit(), so cleanup() only happens once and
         # the leakage is not a problem.
-        del self.connection_cls.pools[self.url]
+        self.connection_cls.pool = None
 
 
 _pool_create_sem = threading.Lock()
 
 
-def get_connection_pool(conf, url, connection_cls):
+def get_connection_pool(conf, connection_cls):
     with _pool_create_sem:
         # Make sure only one thread tries to create the connection pool.
-        if url not in connection_cls.pools:
-            connection_cls.pools[url] = ConnectionPool(conf, url,
-                                                       connection_cls)
-    return connection_cls.pools[url]
+        if not connection_cls.pool:
+            connection_cls.pool = ConnectionPool(conf, connection_cls)
+    return connection_cls.pool
 
 
 class ConnectionContext(rpc_common.Connection):
@@ -107,16 +108,17 @@ class ConnectionContext(rpc_common.Connection):
     If possible the function makes sure to return a connection to the pool.
     """
 
-    def __init__(self, conf, url, connection_pool, pooled=True):
+    def __init__(self, conf, connection_pool, pooled=True, server_params=None):
         """Create a new connection, or get one from the pool."""
         self.connection = None
         self.conf = conf
-        self.url = url
         self.connection_pool = connection_pool
         if pooled:
             self.connection = connection_pool.get()
         else:
-            self.connection = connection_pool.connection_cls(conf, url)
+            self.connection = connection_pool.connection_cls(
+                conf,
+                server_params=server_params)
         self.pooled = pooled
 
     def __enter__(self):
@@ -152,12 +154,92 @@ class ConnectionContext(rpc_common.Connection):
         """Caller is done with this connection."""
         self._done()
 
+    def create_consumer(self, topic, proxy, fanout=False):
+        self.connection.create_consumer(topic, proxy, fanout)
+
+    def create_worker(self, topic, proxy, pool_name):
+        self.connection.create_worker(topic, proxy, pool_name)
+
+    def join_consumer_pool(self, callback, pool_name, topic, exchange_name):
+        self.connection.join_consumer_pool(callback,
+                                           pool_name,
+                                           topic,
+                                           exchange_name)
+
+    def consume_in_thread(self):
+        self.connection.consume_in_thread()
+
     def __getattr__(self, key):
         """Proxy all other calls to the Connection instance."""
         if self.connection:
             return getattr(self.connection, key)
         else:
             raise rpc_common.InvalidRPCConnectionReuse()
+
+
+class ReplyProxy(ConnectionContext):
+    """Connection class for RPC replies / callbacks."""
+    def __init__(self, conf, connection_pool):
+        self._call_waiters = {}
+        self._num_call_waiters = 0
+        self._num_call_waiters_wrn_threshold = 10
+        self._reply_q = 'reply_' + uuid.uuid4().hex
+        super(ReplyProxy, self).__init__(conf, connection_pool, pooled=False)
+        self.declare_direct_consumer(self._reply_q, self._process_data)
+        self.consume_in_thread()
+
+    def _process_data(self, message_data):
+        msg_id = message_data.pop('_msg_id', None)
+        waiter = self._call_waiters.get(msg_id)
+        if not waiter:
+            LOG.warn(_('No calling threads waiting for msg_id : %(msg_id)s'
+                       ', message : %(data)s'), {'msg_id': msg_id,
+                                                 'data': message_data})
+            LOG.warn(_('_call_waiters: %s') % str(self._call_waiters))
+        else:
+            waiter.put(message_data)
+
+    def add_call_waiter(self, waiter, msg_id):
+        self._num_call_waiters += 1
+        if self._num_call_waiters > self._num_call_waiters_wrn_threshold:
+            LOG.warn(_('Number of call waiters is greater than warning '
+                       'threshold: %d. There could be a MulticallProxyWaiter '
+                       'leak.') % self._num_call_waiters_wrn_threshold)
+            self._num_call_waiters_wrn_threshold *= 2
+        self._call_waiters[msg_id] = waiter
+
+    def del_call_waiter(self, msg_id):
+        self._num_call_waiters -= 1
+        del self._call_waiters[msg_id]
+
+    def get_reply_q(self):
+        return self._reply_q
+
+
+def msg_reply(conf, msg_id, reply_q, connection_pool, reply=None,
+              failure=None, ending=False, log_failure=True):
+    """Sends a reply or an error on the channel signified by msg_id.
+
+    Failure should be a sys.exc_info() tuple.
+
+    """
+    with ConnectionContext(conf, connection_pool) as conn:
+        if failure:
+            failure = rpc_common.serialize_remote_exception(failure,
+                                                            log_failure)
+
+        msg = {'result': reply, 'failure': failure}
+        if ending:
+            msg['ending'] = True
+        _add_unique_id(msg)
+        # If a reply_q exists, add the msg_id to the reply and pass the
+        # reply_q to direct_send() to use it as the response queue.
+        # Otherwise use the msg_id for backward compatibility.
+        if reply_q:
+            msg['_msg_id'] = msg_id
+            conn.direct_send(reply_q, rpc_common.serialize_msg(msg))
+        else:
+            conn.direct_send(msg_id, rpc_common.serialize_msg(msg))
 
 
 class RpcContext(rpc_common.CommonRpcContext):
@@ -175,12 +257,22 @@ class RpcContext(rpc_common.CommonRpcContext):
         values['reply_q'] = self.reply_q
         return self.__class__(**values)
 
+    def reply(self, reply=None, failure=None, ending=False,
+              connection_pool=None, log_failure=True):
+        if self.msg_id:
+            msg_reply(self.conf, self.msg_id, self.reply_q, connection_pool,
+                      reply, failure, ending, log_failure)
+            if ending:
+                self.msg_id = None
+
 
 def unpack_context(conf, msg):
     """Unpack context from msg."""
     context_dict = {}
     for key in list(msg.keys()):
-        key = six.text_type(key)
+        # NOTE(vish): Some versions of Python don't like unicode keys
+        #             in kwargs.
+        key = str(key)
         if key.startswith('_context_'):
             value = msg.pop(key)
             context_dict[key[9:]] = value
@@ -188,7 +280,7 @@ def unpack_context(conf, msg):
     context_dict['reply_q'] = msg.pop('_reply_q', None)
     context_dict['conf'] = conf
     ctx = RpcContext.from_dict(context_dict)
-    rpc_common._safe_log(LOG.debug, 'unpacked context: %s', ctx.to_dict())
+    rpc_common._safe_log(LOG.debug, _('unpacked context: %s'), ctx.to_dict())
     return ctx
 
 
@@ -243,4 +335,8 @@ def _add_unique_id(msg):
     """Add unique_id for checking duplicate messages."""
     unique_id = uuid.uuid4().hex
     msg.update({UNIQUE_ID: unique_id})
-    LOG.debug('UNIQUE_ID is %s.', unique_id)
+    LOG.debug(_('UNIQUE_ID is %s.') % (unique_id))
+
+
+def get_control_exchange(conf):
+    return conf.control_exchange

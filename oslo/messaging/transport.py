@@ -27,16 +27,17 @@ __all__ = [
     'set_transport_defaults',
 ]
 
+from oslo.config import cfg
 import six
-from six.moves.urllib import parse
 from stevedore import driver
 
-from oslo.config import cfg
 from oslo.messaging import exceptions
+from oslo.messaging.openstack.common.py3kcompat import urlutils
 
 
 _transport_opts = [
     cfg.StrOpt('transport_url',
+               default=None,
                help='A URL representing the messaging driver to use and its '
                     'full configuration. If not set, we fall back to the '
                     'rpc_backend option and driver specific configuration.'),
@@ -80,21 +81,19 @@ class Transport(object):
     def _require_driver_features(self, requeue=False):
         self._driver.require_features(requeue=requeue)
 
-    def _send(self, target, ctxt, message, wait_for_reply=None, timeout=None,
-              retry=None):
+    def _send(self, target, ctxt, message, wait_for_reply=None, timeout=None):
         if not target.topic:
             raise exceptions.InvalidTarget('A topic is required to send',
                                            target)
         return self._driver.send(target, ctxt, message,
                                  wait_for_reply=wait_for_reply,
-                                 timeout=timeout, retry=retry)
+                                 timeout=timeout)
 
-    def _send_notification(self, target, ctxt, message, version, retry=None):
+    def _send_notification(self, target, ctxt, message, version):
         if not target.topic:
             raise exceptions.InvalidTarget('A topic is required to send',
                                            target)
-        self._driver.send_notification(target, ctxt, message, version,
-                                       retry=retry)
+        self._driver.send_notification(target, ctxt, message, version)
 
     def _listen(self, target):
         if not (target.topic and target.server):
@@ -134,7 +133,7 @@ class DriverLoadFailure(exceptions.MessagingException):
         self.ex = ex
 
 
-def get_transport(conf, url=None, allowed_remote_exmods=None, aliases=None):
+def get_transport(conf, url=None, allowed_remote_exmods=[], aliases=None):
     """A factory method for Transport objects.
 
     This method will construct a Transport object from transport configuration
@@ -164,7 +163,6 @@ def get_transport(conf, url=None, allowed_remote_exmods=None, aliases=None):
     :param aliases: A map of transport alias to transport name
     :type aliases: dict
     """
-    allowed_remote_exmods = allowed_remote_exmods or []
     conf.register_opts(_transport_opts)
 
     if not isinstance(url, TransportURL):
@@ -199,9 +197,6 @@ class TransportHost(object):
         self.username = username
         self.password = password
 
-    def __hash__(self):
-        return hash((self.hostname, self.port, self.username, self.password))
-
     def __eq__(self, other):
         return vars(self) == vars(other)
 
@@ -231,9 +226,9 @@ class TransportURL(object):
 
     :param conf: a ConfigOpts instance
     :type conf: oslo.config.cfg.ConfigOpts
-    :param transport: a transport name for example 'rabbit' or 'qpid'
+    :param transport: a transport name e.g. 'rabbit' or 'qpid'
     :type transport: str
-    :param virtual_host: a virtual host path for example '/'
+    :param virtual_host: a virtual host path e.g. '/'
     :type virtual_host: str
     :param hosts: a list of TransportHost objects
     :type hosts: list
@@ -268,9 +263,6 @@ class TransportURL(object):
     def transport(self, value):
         self._transport = value
 
-    def __hash__(self):
-        return hash((tuple(self.hosts), self.transport, self.virtual_host))
-
     def __eq__(self, other):
         return (self.transport == other.transport and
                 self.virtual_host == other.virtual_host and
@@ -303,9 +295,9 @@ class TransportURL(object):
             # Build the username and password portion of the transport URL
             if username is not None or password is not None:
                 if username is not None:
-                    netloc += parse.quote(username, '')
+                    netloc += urlutils.quote(username, '')
                 if password is not None:
-                    netloc += ':%s' % parse.quote(password, '')
+                    netloc += ':%s' % urlutils.quote(password, '')
                 netloc += '@'
 
             # Build the network location portion of the transport URL
@@ -323,7 +315,7 @@ class TransportURL(object):
         url = '%s://%s/' % (self.transport, ','.join(netlocs))
 
         if self.virtual_host:
-            url += parse.quote(self.virtual_host)
+            url += urlutils.quote(self.virtual_host)
 
         return url
 
@@ -331,7 +323,7 @@ class TransportURL(object):
     def parse(cls, conf, url, aliases=None):
         """Parse an url.
 
-        Assuming a URL takes the form of::
+        Assuming a URL takes the form of:
 
           transport://user:pass@host1:port[,hostN:portN]/virtual_host
 
@@ -341,25 +333,25 @@ class TransportURL(object):
 
         * It is first split by ',' in order to support multiple hosts
         * The last parsed username and password will be propagated to the rest
-          of hosts specified::
+          of hosts specified:
 
-            user:pass@host1:port1,host2:port2
+          user:passwd@host1:port1,host2:port2
 
-            [
-              {"username": "user", "password": "pass", "host": "host1:port1"},
-              {"username": "user", "password": "pass", "host": "host2:port2"}
-            ]
+          [
+            {"username": "user", "password": "passwd", "host": "host1:port1"},
+            {"username": "user", "password": "passwd", "host": "host2:port2"}
+          ]
 
         * In order to avoid the above propagation, it is possible to alter the
           order in which the hosts are specified or specify a set of fake
-          credentials using ",:@host2:port2"::
+          credentials using ",:@host2:port2"
 
-            user:pass@host1:port1,:@host2:port2
+          user:passwd@host1:port1,:@host2:port2
 
-            [
-              {"username": "user", "password": "pass", "host": "host1:port1"},
-              {"username": "", "password": "", "host": "host2:port2"}
-            ]
+          [
+            {"username": "user", "password": "passwd", "host": "host1:port1"},
+            {"username": "", "password": "", "host": "host2:port2"}
+          ]
 
         :param conf: a ConfigOpts instance
         :type conf: oslo.config.cfg.ConfigOpts
@@ -375,10 +367,10 @@ class TransportURL(object):
         if not isinstance(url, six.string_types):
             raise InvalidTransportURL(url, 'Wrong URL type')
 
-        url = parse.urlparse(url)
+        url = urlutils.urlparse(url)
 
         # Make sure there's not a query string; that could identify
-        # requirements we can't comply with (for example ssl), so reject it if
+        # requirements we can't comply with (e.g., ssl), so reject it if
         # it's present
         if '?' in url.path or url.query:
             raise InvalidTransportURL(url.geturl(),

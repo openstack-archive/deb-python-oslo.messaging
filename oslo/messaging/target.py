@@ -69,9 +69,12 @@ class Target(object):
         self.fanout = fanout
 
     def __call__(self, **kwargs):
-        for a in ('exchange', 'topic', 'namespace',
-                  'version', 'server', 'fanout'):
-            kwargs.setdefault(a, getattr(self, a))
+        kwargs.setdefault('exchange', self.exchange)
+        kwargs.setdefault('topic', self.topic)
+        kwargs.setdefault('namespace', self.namespace)
+        kwargs.setdefault('version', self.version)
+        kwargs.setdefault('server', self.server)
+        kwargs.setdefault('fanout', self.fanout)
         return Target(**kwargs)
 
     def __eq__(self, other):
@@ -89,6 +92,3 @@ class Target(object):
                 attrs.append((a, v))
         values = ', '.join(['%s=%s' % i for i in attrs])
         return '<Target ' + values + '>'
-
-    def __hash__(self):
-        return id(self)

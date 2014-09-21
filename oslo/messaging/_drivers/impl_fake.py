@@ -51,11 +51,7 @@ class FakeListener(base.Listener):
             exchange = self._exchange_manager.get_exchange(target.exchange)
             exchange.ensure_queue(target)
 
-    def poll(self, timeout=None):
-        if timeout is not None:
-            deadline = time.time() + timeout
-        else:
-            deadline = None
+    def poll(self):
         while True:
             for target in self._targets:
                 exchange = self._exchange_manager.get_exchange(target.exchange)
@@ -64,15 +60,7 @@ class FakeListener(base.Listener):
                     message = FakeIncomingMessage(self, ctxt, message,
                                                   reply_q, requeue)
                     return message
-            if deadline is not None:
-                pause = deadline - time.time()
-                if pause < 0:
-                    break
-                pause = min(pause, 0.050)
-            else:
-                pause = 0.050
-            time.sleep(pause)
-        return None
+            time.sleep(.05)
 
 
 class FakeExchange(object):
@@ -139,9 +127,9 @@ class FakeExchangeManager(object):
 class FakeDriver(base.BaseDriver):
 
     def __init__(self, conf, url, default_exchange=None,
-                 allowed_remote_exmods=None):
+                 allowed_remote_exmods=[]):
         super(FakeDriver, self).__init__(conf, url, default_exchange,
-                                         allowed_remote_exmods)
+                                         allowed_remote_exmods=[])
 
         self._exchange_manager = FakeExchangeManager(default_exchange)
 
@@ -187,15 +175,10 @@ class FakeDriver(base.BaseDriver):
 
         return None
 
-    def send(self, target, ctxt, message, wait_for_reply=None, timeout=None,
-             retry=None):
-        # NOTE(sileht): retry doesn't need to be implemented, the fake
-        # transport always works
+    def send(self, target, ctxt, message, wait_for_reply=None, timeout=None):
         return self._send(target, ctxt, message, wait_for_reply, timeout)
 
-    def send_notification(self, target, ctxt, message, version, retry=None):
-        # NOTE(sileht): retry doesn't need to be implemented, the fake
-        # transport always works
+    def send_notification(self, target, ctxt, message, version):
         self._send(target, ctxt, message)
 
     def listen(self, target):

@@ -20,9 +20,10 @@ import contextlib
 import logging
 
 import eventlet
-
 from oslo.config import cfg
-from oslo.messaging.openstack.common.gettextutils import _
+
+# FIXME(markmc): remove this
+_ = lambda s: s
 
 matchmaker_opts = [
     cfg.IntOpt('matchmaker_heartbeat_freq',
@@ -125,10 +126,10 @@ class MatchMakerBase(object):
     def add_binding(self, binding, rule, last=True):
         self.bindings.append((binding, rule, False, last))
 
-    # NOTE(ewindisch): kept the following method in case we implement the
-    #                  underlying support.
-    # def add_negate_binding(self, binding, rule, last=True):
-    #     self.bindings.append((binding, rule, True, last))
+    #NOTE(ewindisch): kept the following method in case we implement the
+    #                 underlying support.
+    #def add_negate_binding(self, binding, rule, last=True):
+    #    self.bindings.append((binding, rule, True, last))
 
     def queues(self, key):
         workers = []

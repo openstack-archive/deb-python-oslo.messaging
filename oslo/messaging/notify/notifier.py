@@ -19,12 +19,12 @@ import abc
 import logging
 import uuid
 
+from oslo.config import cfg
 import six
 from stevedore import named
 
-from oslo.config import cfg
+from oslo.messaging.openstack.common import timeutils
 from oslo.messaging import serializer as msg_serializer
-from oslo.utils import timeutils
 
 _notifier_opts = [
     cfg.MultiStrOpt('notification_driver',
@@ -49,7 +49,7 @@ class _Driver(object):
         self.transport = transport
 
     @abc.abstractmethod
-    def notify(self, ctxt, msg, priority, retry):
+    def notify(self, ctxt, msg, priority):
         pass
 
 
@@ -62,7 +62,7 @@ class Notifier(object):
 
     Notification messages follow the following format::
 
-        {'message_id': six.text_type(uuid.uuid4()),
+        {'message_id': str(uuid.uuid4()),
          'publisher_id': 'compute.host1',
          'timestamp': timeutils.utcnow(),
          'priority': 'WARN',
@@ -72,10 +72,10 @@ class Notifier(object):
     A Notifier object can be instantiated with a transport object and a
     publisher ID:
 
-        notifier = messaging.Notifier(get_transport(CONF), 'compute')
+        notifier = notifier.Notifier(get_transport(CONF), 'compute')
 
     and notifications are sent via drivers chosen with the notification_driver
-    config option and on the topics chosen with the notification_topics config
+    config option and on the topics consen with the notification_topics config
     option.
 
     Alternatively, a Notifier object can be instantiated with a specific
@@ -96,13 +96,12 @@ class Notifier(object):
 
     def __init__(self, transport, publisher_id=None,
                  driver=None, topic=None,
-                 serializer=None, retry=None):
+                 serializer=None):
         """Construct a Notifier object.
 
         :param transport: the transport to use for sending messages
         :type transport: oslo.messaging.Transport
-        :param publisher_id: field in notifications sent, for example
-                             'compute.host1'
+        :param publisher_id: field in notifications sent, e.g. 'compute.host1'
         :type publisher_id: str
         :param driver: a driver to lookup from oslo.messaging.notify.drivers
         :type driver: str
@@ -110,17 +109,11 @@ class Notifier(object):
         :type topic: str
         :param serializer: an optional entity serializer
         :type serializer: Serializer
-        :param retry: an connection retries configuration
-                      None or -1 means to retry forever
-                      0 means no retry
-                      N means N retries
-        :type retry: int
         """
         transport.conf.register_opts(_notifier_opts)
 
         self.transport = transport
         self.publisher_id = publisher_id
-        self.retry = retry
 
         self._driver_names = ([driver] if driver is not None
                               else transport.conf.notification_driver)
@@ -137,44 +130,37 @@ class Notifier(object):
             invoke_kwds={
                 'topics': self._topics,
                 'transport': self.transport,
-            }
+            },
         )
 
     _marker = object()
 
-    def prepare(self, publisher_id=_marker, retry=_marker):
+    def prepare(self, publisher_id=_marker):
         """Return a specialized Notifier instance.
 
         Returns a new Notifier instance with the supplied publisher_id. Allows
         sending notifications from multiple publisher_ids without the overhead
         of notification driver loading.
 
-        :param publisher_id: field in notifications sent, for example
-                             'compute.host1'
+        :param publisher_id: field in notifications sent, e.g. 'compute.host1'
         :type publisher_id: str
-        :param retry: an connection retries configuration
-                      None or -1 means to retry forever
-                      0 means no retry
-                      N means N retries
-        :type retry: int
         """
-        return _SubNotifier._prepare(self, publisher_id, retry=retry)
+        return _SubNotifier._prepare(self, publisher_id)
 
-    def _notify(self, ctxt, event_type, payload, priority, publisher_id=None,
-                retry=None):
+    def _notify(self, ctxt, event_type, payload, priority, publisher_id=None):
         payload = self._serializer.serialize_entity(ctxt, payload)
         ctxt = self._serializer.serialize_context(ctxt)
 
-        msg = dict(message_id=six.text_type(uuid.uuid4()),
+        msg = dict(message_id=str(uuid.uuid4()),
                    publisher_id=publisher_id or self.publisher_id,
                    event_type=event_type,
                    priority=priority,
                    payload=payload,
-                   timestamp=six.text_type(timeutils.utcnow()))
+                   timestamp=str(timeutils.utcnow()))
 
         def do_notify(ext):
             try:
-                ext.obj.notify(ctxt, msg, priority, retry or self.retry)
+                ext.obj.notify(ctxt, msg, priority)
             except Exception as e:
                 _LOG.exception("Problem '%(e)s' attempting to send to "
                                "notification system. Payload=%(payload)s",
@@ -188,12 +174,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'AUDIT')
 
@@ -202,12 +186,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'DEBUG')
 
@@ -216,12 +198,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'INFO')
 
@@ -230,12 +210,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'WARN')
 
@@ -246,12 +224,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'ERROR')
 
@@ -260,12 +236,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'CRITICAL')
 
@@ -280,12 +254,10 @@ class Notifier(object):
 
         :param ctxt: a request context dict
         :type ctxt: dict
-        :param event_type: describes the event, for example
-                           'compute.create_instance'
+        :param event_type: describes the event, e.g. 'compute.create_instance'
         :type event_type: str
         :param payload: the notification payload
         :type payload: dict
-        :raises: MessageDeliveryFailure
         """
         self._notify(ctxt, event_type, payload, 'SAMPLE')
 
@@ -294,11 +266,10 @@ class _SubNotifier(Notifier):
 
     _marker = Notifier._marker
 
-    def __init__(self, base, publisher_id, retry):
+    def __init__(self, base, publisher_id):
         self._base = base
         self.transport = base.transport
         self.publisher_id = publisher_id
-        self.retry = retry
 
         self._serializer = self._base._serializer
         self._driver_mgr = self._base._driver_mgr
@@ -307,9 +278,7 @@ class _SubNotifier(Notifier):
         super(_SubNotifier, self)._notify(ctxt, event_type, payload, priority)
 
     @classmethod
-    def _prepare(cls, base, publisher_id=_marker, retry=_marker):
+    def _prepare(cls, base, publisher_id=_marker):
         if publisher_id is cls._marker:
             publisher_id = base.publisher_id
-        if retry is cls._marker:
-            retry = base.retry
-        return cls(base, publisher_id, retry=retry)
+        return cls(base, publisher_id)

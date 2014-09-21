@@ -15,7 +15,6 @@
 import functools
 import itertools
 import logging
-import random
 import socket
 import ssl
 import time
@@ -25,15 +24,16 @@ import kombu
 import kombu.connection
 import kombu.entity
 import kombu.messaging
+from oslo.config import cfg
 import six
 
-from oslo.config import cfg
 from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
 from oslo.messaging._drivers import common as rpc_common
-from oslo.messaging import exceptions
-from oslo.messaging.openstack.common.gettextutils import _
-from oslo.utils import netutils
+from oslo.messaging.openstack.common import network_utils
+
+# FIXME(markmc): remove this
+_ = lambda s: s
 
 rabbit_opts = [
     cfg.StrOpt('kombu_ssl_version',
@@ -50,8 +50,8 @@ rabbit_opts = [
                help='SSL cert file (valid only if SSL enabled).'),
     cfg.StrOpt('kombu_ssl_ca_certs',
                default='',
-               help='SSL certification authority file '
-                    '(valid only if SSL enabled).'),
+               help=('SSL certification authority file '
+                     '(valid only if SSL enabled).')),
     cfg.FloatOpt('kombu_reconnect_delay',
                  default=1.0,
                  help='How long to wait before reconnecting in response to an '
@@ -149,7 +149,7 @@ class ConsumerBase(object):
         passed in here as a dictionary.
         """
         self.callback = callback
-        self.tag = six.text_type(tag)
+        self.tag = str(tag)
         self.kwargs = kwargs
         self.queue = None
         self.reconnect(channel)
@@ -206,7 +206,7 @@ class ConsumerBase(object):
             self.queue.cancel(self.tag)
         except KeyError as e:
             # NOTE(comstud): Kludge to get around a amqplib bug
-            if six.text_type(e) != "u'%s'" % self.tag:
+            if str(e) != "u'%s'" % self.tag:
                 raise
         self.queue = None
 
@@ -246,8 +246,8 @@ class DirectConsumer(ConsumerBase):
 class TopicConsumer(ConsumerBase):
     """Consumer class for 'topic'."""
 
-    def __init__(self, conf, channel, topic, callback, tag, exchange_name,
-                 name=None, **kwargs):
+    def __init__(self, conf, channel, topic, callback, tag, name=None,
+                 exchange_name=None, **kwargs):
         """Init a 'topic' queue.
 
         :param channel: the amqp channel to use
@@ -255,7 +255,6 @@ class TopicConsumer(ConsumerBase):
         :paramtype topic: str
         :param callback: the callback to call when messages are received
         :param tag: a unique ID for the consumer on the channel
-        :param exchange_name: the exchange name to use
         :param name: optional queue name, defaults to topic
         :paramtype name: str
 
@@ -267,6 +266,7 @@ class TopicConsumer(ConsumerBase):
                    'auto_delete': conf.amqp_auto_delete,
                    'exclusive': False}
         options.update(kwargs)
+        exchange_name = exchange_name or rpc_amqp.get_control_exchange(conf)
         exchange = kombu.entity.Exchange(name=exchange_name,
                                          type='topic',
                                          durable=options['durable'],
@@ -346,7 +346,7 @@ class Publisher(object):
 
 class DirectPublisher(Publisher):
     """Publisher class for 'direct'."""
-    def __init__(self, conf, channel, topic, **kwargs):
+    def __init__(self, conf, channel, msg_id, **kwargs):
         """Init a 'direct' publisher.
 
         Kombu options may be passed as keyword args to override defaults
@@ -356,13 +356,13 @@ class DirectPublisher(Publisher):
                    'auto_delete': True,
                    'exclusive': False}
         options.update(kwargs)
-        super(DirectPublisher, self).__init__(channel, topic, topic,
+        super(DirectPublisher, self).__init__(channel, msg_id, msg_id,
                                               type='direct', **options)
 
 
 class TopicPublisher(Publisher):
     """Publisher class for 'topic'."""
-    def __init__(self, conf, channel, exchange_name, topic, **kwargs):
+    def __init__(self, conf, channel, topic, **kwargs):
         """Init a 'topic' publisher.
 
         Kombu options may be passed as keyword args to override defaults
@@ -371,6 +371,7 @@ class TopicPublisher(Publisher):
                    'auto_delete': conf.amqp_auto_delete,
                    'exclusive': False}
         options.update(kwargs)
+        exchange_name = rpc_amqp.get_control_exchange(conf)
         super(TopicPublisher, self).__init__(channel,
                                              exchange_name,
                                              topic,
@@ -396,11 +397,10 @@ class FanoutPublisher(Publisher):
 class NotifyPublisher(TopicPublisher):
     """Publisher class for 'notify'."""
 
-    def __init__(self, conf, channel, exchange_name, topic, **kwargs):
+    def __init__(self, conf, channel, topic, **kwargs):
         self.durable = kwargs.pop('durable', conf.amqp_durable_queues)
         self.queue_arguments = _get_queue_arguments(conf)
-        super(NotifyPublisher, self).__init__(conf, channel, exchange_name,
-                                              topic, **kwargs)
+        super(NotifyPublisher, self).__init__(conf, channel, topic, **kwargs)
 
     def reconnect(self, channel):
         super(NotifyPublisher, self).reconnect(channel)
@@ -420,9 +420,9 @@ class NotifyPublisher(TopicPublisher):
 class Connection(object):
     """Connection object."""
 
-    pools = {}
+    pool = None
 
-    def __init__(self, conf, url):
+    def __init__(self, conf, server_params=None):
         self.consumers = []
         self.conf = conf
         self.max_retries = self.conf.rabbit_max_retries
@@ -435,54 +435,38 @@ class Connection(object):
         self.interval_max = 30
         self.memory_transport = False
 
+        if server_params is None:
+            server_params = {}
+        # Keys to translate from server_params to kombu params
+        server_params_to_kombu_params = {'username': 'userid'}
+
         ssl_params = self._fetch_ssl_params()
+        params_list = []
+        for adr in self.conf.rabbit_hosts:
+            hostname, port = network_utils.parse_host_port(
+                adr, default_port=self.conf.rabbit_port)
 
-        if url.virtual_host is not None:
-            virtual_host = url.virtual_host
-        else:
-            virtual_host = self.conf.rabbit_virtual_host
+            params = {
+                'hostname': hostname,
+                'port': port,
+                'userid': self.conf.rabbit_userid,
+                'password': self.conf.rabbit_password,
+                'login_method': self.conf.rabbit_login_method,
+                'virtual_host': self.conf.rabbit_virtual_host,
+            }
 
-        self.brokers_params = []
-        if url.hosts:
-            for host in url.hosts:
-                params = {
-                    'hostname': host.hostname,
-                    'port': host.port or 5672,
-                    'userid': host.username or '',
-                    'password': host.password or '',
-                    'login_method': self.conf.rabbit_login_method,
-                    'virtual_host': virtual_host
-                }
-                if self.conf.fake_rabbit:
-                    params['transport'] = 'memory'
-                if self.conf.rabbit_use_ssl:
-                    params['ssl'] = ssl_params
+            for sp_key, value in six.iteritems(server_params):
+                p_key = server_params_to_kombu_params.get(sp_key, sp_key)
+                params[p_key] = value
 
-                self.brokers_params.append(params)
-        else:
-            # Old configuration format
-            for adr in self.conf.rabbit_hosts:
-                hostname, port = netutils.parse_host_port(
-                    adr, default_port=self.conf.rabbit_port)
+            if self.conf.fake_rabbit:
+                params['transport'] = 'memory'
+            if self.conf.rabbit_use_ssl:
+                params['ssl'] = ssl_params
 
-                params = {
-                    'hostname': hostname,
-                    'port': port,
-                    'userid': self.conf.rabbit_userid,
-                    'password': self.conf.rabbit_password,
-                    'login_method': self.conf.rabbit_login_method,
-                    'virtual_host': virtual_host
-                }
+            params_list.append(params)
 
-                if self.conf.fake_rabbit:
-                    params['transport'] = 'memory'
-                if self.conf.rabbit_use_ssl:
-                    params['ssl'] = ssl_params
-
-                self.brokers_params.append(params)
-
-        random.shuffle(self.brokers_params)
-        self.brokers = itertools.cycle(self.brokers_params)
+        self.params_list = itertools.cycle(params_list)
 
         self.memory_transport = self.conf.fake_rabbit
 
@@ -533,14 +517,33 @@ class Connection(object):
         # Return the extended behavior or just have the default behavior
         return ssl_params or True
 
-    def _connect(self, broker):
+    def _connect(self, params):
         """Connect to rabbit.  Re-establish any queues that may have
         been declared before if we are reconnecting.  Exceptions should
         be handled by the caller.
         """
-        LOG.info(_("Connecting to AMQP server on "
-                   "%(hostname)s:%(port)d"), broker)
-        self.connection = kombu.connection.BrokerConnection(**broker)
+        if self.connection:
+            LOG.info(_("Reconnecting to AMQP server on "
+                     "%(hostname)s:%(port)d") % params)
+            try:
+                # XXX(nic): when reconnecting to a RabbitMQ cluster
+                # with mirrored queues in use, the attempt to release the
+                # connection can hang "indefinitely" somewhere deep down
+                # in Kombu.  Blocking the thread for a bit prior to
+                # release seems to kludge around the problem where it is
+                # otherwise reproduceable.
+                if self.conf.kombu_reconnect_delay > 0:
+                    LOG.info(_("Delaying reconnect for %1.1f seconds...") %
+                             self.conf.kombu_reconnect_delay)
+                    time.sleep(self.conf.kombu_reconnect_delay)
+
+                self.connection.release()
+            except self.connection_errors:
+                pass
+            # Setting this in case the next statement fails, though
+            # it shouldn't be doing any network operations, yet.
+            self.connection = None
+        self.connection = kombu.connection.BrokerConnection(**params)
         self.connection_errors = self.connection.connection_errors
         self.channel_errors = self.connection.channel_errors
         if self.memory_transport:
@@ -555,104 +558,68 @@ class Connection(object):
             self.channel._new_queue('ae.undeliver')
         for consumer in self.consumers:
             consumer.reconnect(self.channel)
-        LOG.info(_('Connected to AMQP server on %(hostname)s:%(port)d'),
-                 broker)
+        LOG.info(_('Connected to AMQP server on %(hostname)s:%(port)d') %
+                 params)
 
-    def _disconnect(self):
-        if self.connection:
-            # XXX(nic): when reconnecting to a RabbitMQ cluster
-            # with mirrored queues in use, the attempt to release the
-            # connection can hang "indefinitely" somewhere deep down
-            # in Kombu.  Blocking the thread for a bit prior to
-            # release seems to kludge around the problem where it is
-            # otherwise reproduceable.
-            if self.conf.kombu_reconnect_delay > 0:
-                LOG.info(_("Delaying reconnect for %1.1f seconds...") %
-                         self.conf.kombu_reconnect_delay)
-                time.sleep(self.conf.kombu_reconnect_delay)
-
-            try:
-                self.connection.release()
-            except self.connection_errors:
-                pass
-            self.connection = None
-
-    def reconnect(self, retry=None):
+    def reconnect(self):
         """Handles reconnecting and re-establishing queues.
-        Will retry up to retry number of times.
-        retry = None means use the value of rabbit_max_retries
-        retry = -1 means to retry forever
-        retry = 0 means no retry
-        retry = N means N retries
+        Will retry up to self.max_retries number of times.
+        self.max_retries = 0 means to retry forever.
         Sleep between tries, starting at self.interval_start
         seconds, backing off self.interval_stepping number of seconds
         each attempt.
         """
 
         attempt = 0
-        loop_forever = False
-        if retry is None:
-            retry = self.max_retries
-        if retry is None or retry < 0:
-            loop_forever = True
-
         while True:
-            self._disconnect()
-
-            broker = six.next(self.brokers)
+            params = six.next(self.params_list)
             attempt += 1
             try:
-                self._connect(broker)
+                self._connect(params)
                 return
-            except IOError as ex:
-                e = ex
-            except self.connection_errors as ex:
-                e = ex
-            except Exception as ex:
+            except IOError as e:
+                pass
+            except self.connection_errors as e:
+                pass
+            except Exception as e:
                 # NOTE(comstud): Unfortunately it's possible for amqplib
                 # to return an error not covered by its transport
                 # connection_errors in the case of a timeout waiting for
                 # a protocol response.  (See paste link in LP888621)
                 # So, we check all exceptions for 'timeout' in them
                 # and try to reconnect in this case.
-                if 'timeout' not in six.text_type(e):
+                if 'timeout' not in str(e):
                     raise
-                e = ex
 
             log_info = {}
-            log_info['err_str'] = e
-            log_info['retry'] = retry or 0
-            log_info.update(broker)
+            log_info['err_str'] = str(e)
+            log_info['max_retries'] = self.max_retries
+            log_info.update(params)
 
-            if not loop_forever and attempt > retry:
+            if self.max_retries and attempt == self.max_retries:
                 msg = _('Unable to connect to AMQP server on '
-                        '%(hostname)s:%(port)d after %(retry)d '
+                        '%(hostname)s:%(port)d after %(max_retries)d '
                         'tries: %(err_str)s') % log_info
                 LOG.error(msg)
-                raise exceptions.MessageDeliveryFailure(msg)
-            else:
-                if attempt == 1:
-                    sleep_time = self.interval_start or 1
-                elif attempt > 1:
-                    sleep_time += self.interval_stepping
+                raise rpc_common.RPCException(msg)
 
+            if attempt == 1:
+                sleep_time = self.interval_start or 1
+            elif attempt > 1:
+                sleep_time += self.interval_stepping
+            if self.interval_max:
                 sleep_time = min(sleep_time, self.interval_max)
 
-                log_info['sleep_time'] = sleep_time
-                if 'Socket closed' in six.text_type(e):
-                    LOG.error(_('AMQP server %(hostname)s:%(port)d closed'
-                                ' the connection. Check login credentials:'
-                                ' %(err_str)s'), log_info)
-                else:
-                    LOG.error(_('AMQP server on %(hostname)s:%(port)d is '
-                                'unreachable: %(err_str)s. Trying again in '
-                                '%(sleep_time)d seconds.'), log_info)
-                time.sleep(sleep_time)
+            log_info['sleep_time'] = sleep_time
+            LOG.error(_('AMQP server on %(hostname)s:%(port)d is '
+                        'unreachable: %(err_str)s. Trying again in '
+                        '%(sleep_time)d seconds.') % log_info)
+            time.sleep(sleep_time)
 
-    def ensure(self, error_callback, method, retry=None):
+    def ensure(self, error_callback, method, *args, **kwargs):
         while True:
             try:
-                return method()
+                return method(*args, **kwargs)
             except self.connection_errors as e:
                 if error_callback:
                     error_callback(e)
@@ -669,11 +636,11 @@ class Connection(object):
                 # a protocol response.  (See paste link in LP888621)
                 # So, we check all exceptions for 'timeout' in them
                 # and try to reconnect in this case.
-                if 'timeout' not in six.text_type(e):
+                if 'timeout' not in str(e):
                     raise
                 if error_callback:
                     error_callback(e)
-            self.reconnect(retry=retry)
+            self.reconnect()
 
     def get_channel(self):
         """Convenience call for bin/clear_rabbit_queues."""
@@ -681,9 +648,8 @@ class Connection(object):
 
     def close(self):
         """Close/release this connection."""
-        if self.connection:
-            self.connection.release()
-            self.connection = None
+        self.connection.release()
+        self.connection = None
 
     def reset(self):
         """Reset a connection so it can be used again."""
@@ -700,9 +666,9 @@ class Connection(object):
         """
 
         def _connect_error(exc):
-            log_info = {'topic': topic, 'err_str': exc}
+            log_info = {'topic': topic, 'err_str': str(exc)}
             LOG.error(_("Failed to declare consumer for topic '%(topic)s': "
-                      "%(err_str)s"), log_info)
+                      "%(err_str)s") % log_info)
 
         def _declare_consumer():
             consumer = consumer_cls(self.conf, self.channel, topic, callback,
@@ -717,11 +683,12 @@ class Connection(object):
 
         def _error_callback(exc):
             if isinstance(exc, socket.timeout):
-                LOG.debug('Timed out waiting for RPC response: %s', exc)
+                LOG.debug(_('Timed out waiting for RPC response: %s') %
+                          str(exc))
                 raise rpc_common.Timeout()
             else:
-                LOG.exception(_('Failed to consume message from queue: %s'),
-                              exc)
+                LOG.exception(_('Failed to consume message from queue: %s') %
+                              str(exc))
                 self.do_consume = True
 
         def _consume():
@@ -739,20 +706,19 @@ class Connection(object):
                 raise StopIteration
             yield self.ensure(_error_callback, _consume)
 
-    def publisher_send(self, cls, topic, msg, timeout=None, retry=None,
-                       **kwargs):
+    def publisher_send(self, cls, topic, msg, timeout=None, **kwargs):
         """Send to a publisher based on the publisher class."""
 
         def _error_callback(exc):
-            log_info = {'topic': topic, 'err_str': exc}
+            log_info = {'topic': topic, 'err_str': str(exc)}
             LOG.exception(_("Failed to publish message to topic "
-                          "'%(topic)s': %(err_str)s"), log_info)
+                          "'%(topic)s': %(err_str)s") % log_info)
 
         def _publish():
-            publisher = cls(self.conf, self.channel, topic=topic, **kwargs)
+            publisher = cls(self.conf, self.channel, topic, **kwargs)
             publisher.send(msg, timeout)
 
-        self.ensure(_error_callback, _publish, retry=retry)
+        self.ensure(_error_callback, _publish)
 
     def declare_direct_consumer(self, topic, callback):
         """Create a 'direct' queue.
@@ -761,8 +727,8 @@ class Connection(object):
         """
         self.declare_consumer(DirectConsumer, topic, callback)
 
-    def declare_topic_consumer(self, exchange_name, topic, callback=None,
-                               queue_name=None):
+    def declare_topic_consumer(self, topic, callback=None, queue_name=None,
+                               exchange_name=None):
         """Create a 'topic' consumer."""
         self.declare_consumer(functools.partial(TopicConsumer,
                                                 name=queue_name,
@@ -778,19 +744,17 @@ class Connection(object):
         """Send a 'direct' message."""
         self.publisher_send(DirectPublisher, msg_id, msg)
 
-    def topic_send(self, exchange_name, topic, msg, timeout=None, retry=None):
+    def topic_send(self, topic, msg, timeout=None):
         """Send a 'topic' message."""
-        self.publisher_send(TopicPublisher, topic, msg, timeout,
-                            exchange_name=exchange_name, retry=retry)
+        self.publisher_send(TopicPublisher, topic, msg, timeout)
 
-    def fanout_send(self, topic, msg, retry=None):
+    def fanout_send(self, topic, msg):
         """Send a 'fanout' message."""
-        self.publisher_send(FanoutPublisher, topic, msg, retry=retry)
+        self.publisher_send(FanoutPublisher, topic, msg)
 
-    def notify_send(self, exchange_name, topic, msg, retry=None, **kwargs):
+    def notify_send(self, topic, msg, **kwargs):
         """Send a notify message on a topic."""
-        self.publisher_send(NotifyPublisher, topic, msg, timeout=None,
-                            exchange_name=exchange_name, retry=retry, **kwargs)
+        self.publisher_send(NotifyPublisher, topic, msg, None, **kwargs)
 
     def consume(self, limit=None, timeout=None):
         """Consume from all queues/consumers."""
@@ -804,13 +768,12 @@ class Connection(object):
 
 class RabbitDriver(amqpdriver.AMQPDriverBase):
 
-    def __init__(self, conf, url,
-                 default_exchange=None,
-                 allowed_remote_exmods=None):
+    def __init__(self, conf, url, default_exchange=None,
+                 allowed_remote_exmods=[]):
         conf.register_opts(rabbit_opts)
         conf.register_opts(rpc_amqp.amqp_opts)
 
-        connection_pool = rpc_amqp.get_connection_pool(conf, url, Connection)
+        connection_pool = rpc_amqp.get_connection_pool(conf, Connection)
 
         super(RabbitDriver, self).__init__(conf, url,
                                            connection_pool,

@@ -12,19 +12,14 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import operator
 import random
+import thread
 import threading
 import time
 
 import mock
-try:
-    import qpid
-except ImportError:
-    qpid = None
-from six.moves import _thread
+import qpid
 import testscenarios
-import testtools
 
 from oslo import messaging
 from oslo.messaging._drivers import impl_qpid as qpid_driver
@@ -67,7 +62,6 @@ def _is_qpidd_service_running():
 
 class _QpidBaseTestCase(test_utils.BaseTestCase):
 
-    @testtools.skipIf(qpid is None, "qpid not available")
     def setUp(self):
         super(_QpidBaseTestCase, self).setUp()
         self.messaging_conf.transport_driver = 'qpid'
@@ -108,81 +102,16 @@ class _QpidBaseTestCase(test_utils.BaseTestCase):
                 self.con_send.close()
 
 
-class TestQpidTransportURL(_QpidBaseTestCase):
-
-    scenarios = [
-        ('none', dict(url=None,
-                      expected=[dict(host='localhost:5672',
-                                     username='',
-                                     password='')])),
-        ('empty',
-         dict(url='qpid:///',
-              expected=[dict(host='localhost:5672',
-                             username='',
-                             password='')])),
-        ('localhost',
-         dict(url='qpid://localhost/',
-              expected=[dict(host='localhost',
-                             username='',
-                             password='')])),
-        ('no_creds',
-         dict(url='qpid://host/',
-              expected=[dict(host='host',
-                             username='',
-                             password='')])),
-        ('no_port',
-         dict(url='qpid://user:password@host/',
-              expected=[dict(host='host',
-                             username='user',
-                             password='password')])),
-        ('full_url',
-         dict(url='qpid://user:password@host:10/',
-              expected=[dict(host='host:10',
-                             username='user',
-                             password='password')])),
-        ('full_two_url',
-         dict(url='qpid://user:password@host:10,'
-              'user2:password2@host2:12/',
-              expected=[dict(host='host:10',
-                             username='user',
-                             password='password'),
-                        dict(host='host2:12',
-                             username='user2',
-                             password='password2')
-                        ]
-              )),
-
-    ]
-
-    @mock.patch.object(qpid_driver.Connection, 'reconnect')
-    def test_transport_url(self, *args):
-        transport = messaging.get_transport(self.conf, self.url)
-        self.addCleanup(transport.cleanup)
-        driver = transport._driver
-
-        brokers_params = driver._get_connection().brokers_params
-        self.assertEqual(sorted(self.expected,
-                                key=operator.itemgetter('host')),
-                         sorted(brokers_params,
-                                key=operator.itemgetter('host')))
-
-
 class TestQpidInvalidTopologyVersion(_QpidBaseTestCase):
     """Unit test cases to test invalid qpid topology version."""
 
     scenarios = [
         ('direct', dict(consumer_cls=qpid_driver.DirectConsumer,
-                        consumer_kwargs={},
-                        publisher_cls=qpid_driver.DirectPublisher,
-                        publisher_kwargs={})),
+                        publisher_cls=qpid_driver.DirectPublisher)),
         ('topic', dict(consumer_cls=qpid_driver.TopicConsumer,
-                       consumer_kwargs={'exchange_name': 'openstack'},
-                       publisher_cls=qpid_driver.TopicPublisher,
-                       publisher_kwargs={'exchange_name': 'openstack'})),
+                       publisher_cls=qpid_driver.TopicPublisher)),
         ('fanout', dict(consumer_cls=qpid_driver.FanoutConsumer,
-                        consumer_kwargs={},
-                        publisher_cls=qpid_driver.FanoutPublisher,
-                        publisher_kwargs={})),
+                        publisher_cls=qpid_driver.FanoutPublisher)),
     ]
 
     def setUp(self):
@@ -206,8 +135,7 @@ class TestQpidInvalidTopologyVersion(_QpidBaseTestCase):
             self.consumer_cls(self.conf,
                               self.session_receive,
                               msgid_or_topic,
-                              consumer_callback,
-                              **self.consumer_kwargs)
+                              consumer_callback)
         except Exception as e:
             recvd_exc_msg = e.message
 
@@ -217,8 +145,7 @@ class TestQpidInvalidTopologyVersion(_QpidBaseTestCase):
         try:
             self.publisher_cls(self.conf,
                                self.session_send,
-                               topic=msgid_or_topic,
-                               **self.publisher_kwargs)
+                               msgid_or_topic)
         except Exception as e:
             recvd_exc_msg = e.message
 
@@ -286,8 +213,8 @@ class TestQpidDirectConsumerPublisher(_QpidBaseTestCase):
         thread1.join()
         thread2.join()
 
-        self.assertEqual(self.no_msgs, len(self._messages))
-        self.assertEqual(self._expected, self._messages)
+        self.assertEqual(len(self._messages), self.no_msgs)
+        self.assertEqual(self._messages, self._expected)
 
 
 TestQpidDirectConsumerPublisher.generate_scenarios()
@@ -320,15 +247,11 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
     ]
     _exchange_class = [
         ('topic', dict(consumer_cls=qpid_driver.TopicConsumer,
-                       consumer_kwargs={'exchange_name': 'openstack'},
                        publisher_cls=qpid_driver.TopicPublisher,
-                       publisher_kwargs={'exchange_name': 'openstack'},
                        topic='topictest.test',
                        receive_topic='topictest.test')),
         ('fanout', dict(consumer_cls=qpid_driver.FanoutConsumer,
-                        consumer_kwargs={},
                         publisher_cls=qpid_driver.FanoutPublisher,
-                        publisher_kwargs={},
                         topic='fanouttest',
                         receive_topic='fanouttest')),
     ]
@@ -373,7 +296,7 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
             msgcontent = msg
 
         splitmsg = msgcontent.split('-')
-        key = _thread.get_ident()
+        key = thread.get_ident()
 
         if key not in self._messages:
             self._messages[key] = dict()
@@ -421,8 +344,7 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
             consumer = self.consumer_cls(self.conf,
                                          self.session_receive,
                                          self.receive_topic,
-                                         self.consumer_callback,
-                                         **self.consumer_kwargs)
+                                         self.consumer_callback)
             self._receivers.append(consumer)
 
             # create receivers threads
@@ -433,8 +355,7 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
         for sender_id in range(self.no_senders):
             publisher = self.publisher_cls(self.conf,
                                            self.session_send,
-                                           topic=self.topic,
-                                           **self.publisher_kwargs)
+                                           self.topic)
             self._senders.append(publisher)
 
             # create sender threads
@@ -460,8 +381,8 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
         # self._messages and compare with the expected messages
         # messages.
 
-        self.assertEqual(self.no_senders, len(self._expected))
-        self.assertEqual(self.no_receivers, len(self._messages))
+        self.assertEqual(len(self._expected), self.no_senders)
+        self.assertEqual(len(self._messages), self.no_receivers)
 
         for key, messages in self._messages.iteritems():
             self.assertEqual(self._expected, messages)
@@ -469,97 +390,19 @@ class TestQpidTopicAndFanout(_QpidBaseTestCase):
 TestQpidTopicAndFanout.generate_scenarios()
 
 
-class AddressNodeMatcher(object):
-    def __init__(self, node):
-        self.node = node
-
-    def __eq__(self, address):
-        return address.split(';')[0].strip() == self.node
-
-
-class TestDriverInterface(_QpidBaseTestCase):
-    """Unit Test cases to test the amqpdriver with qpid
-    """
-
-    def setUp(self):
-        super(TestDriverInterface, self).setUp()
-        self.config(qpid_topology_version=2)
-        transport = messaging.get_transport(self.conf)
-        self.driver = transport._driver
-
-        original_get_connection = self.driver._get_connection
-        p = mock.patch.object(self.driver, '_get_connection',
-                              side_effect=lambda pooled=True:
-                              original_get_connection(False))
-        p.start()
-        self.addCleanup(p.stop)
-
-    def test_listen_and_direct_send(self):
-        target = messaging.Target(exchange="exchange_test",
-                                  topic="topic_test",
-                                  server="server_test")
-
-        with mock.patch('qpid.messaging.Connection') as conn_cls:
-            conn = conn_cls.return_value
-            session = conn.session.return_value
-            session.receiver.side_effect = [mock.Mock(), mock.Mock(),
-                                            mock.Mock()]
-
-            listener = self.driver.listen(target)
-            listener.conn.direct_send("msg_id", {})
-
-        self.assertEqual(3, len(listener.conn.consumers))
-
-        expected_calls = [
-            mock.call(AddressNodeMatcher(
-                'amq.topic/topic/exchange_test/topic_test')),
-            mock.call(AddressNodeMatcher(
-                'amq.topic/topic/exchange_test/topic_test.server_test')),
-            mock.call(AddressNodeMatcher('amq.topic/fanout/topic_test')),
-        ]
-        session.receiver.assert_has_calls(expected_calls)
-        session.sender.assert_called_with(
-            AddressNodeMatcher("amq.direct/msg_id"))
-
-    def test_send(self):
-        target = messaging.Target(exchange="exchange_test",
-                                  topic="topic_test",
-                                  server="server_test")
-        with mock.patch('qpid.messaging.Connection') as conn_cls:
-            conn = conn_cls.return_value
-            session = conn.session.return_value
-
-            self.driver.send(target, {}, {})
-            session.sender.assert_called_with(AddressNodeMatcher(
-                "amq.topic/topic/exchange_test/topic_test.server_test"))
-
-    def test_send_notification(self):
-        target = messaging.Target(exchange="exchange_test",
-                                  topic="topic_test.info")
-        with mock.patch('qpid.messaging.Connection') as conn_cls:
-            conn = conn_cls.return_value
-            session = conn.session.return_value
-
-            self.driver.send_notification(target, {}, {}, "2.0")
-            session.sender.assert_called_with(AddressNodeMatcher(
-                "amq.topic/topic/exchange_test/topic_test.info"))
-
-
 class TestQpidReconnectOrder(test_utils.BaseTestCase):
     """Unit Test cases to test reconnection
     """
 
-    @testtools.skipIf(qpid is None, "qpid not available")
     def test_reconnect_order(self):
         brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
         brokers_count = len(brokers)
 
-        self.config(qpid_hosts=brokers)
+        self.messaging_conf.conf.qpid_hosts = brokers
 
         with mock.patch('qpid.messaging.Connection') as conn_mock:
             # starting from the first broker in the list
-            url = messaging.TransportURL.parse(self.conf, None)
-            connection = qpid_driver.Connection(self.conf, url)
+            connection = qpid_driver.Connection(self.messaging_conf.conf)
 
             # reconnect will advance to the next broker, one broker per
             # attempt, and then wrap to the start of the list once the end is
@@ -567,16 +410,23 @@ class TestQpidReconnectOrder(test_utils.BaseTestCase):
             for _ in range(brokers_count):
                 connection.reconnect()
 
+            connection.close()
+
         expected = []
         for broker in brokers:
-            expected.extend([mock.call("%s:5672" % broker),
+            expected.extend([mock.call(broker),
                              mock.call().open(),
                              mock.call().session(),
                              mock.call().opened(),
                              mock.call().opened().__nonzero__(),
                              mock.call().close()])
 
-        conn_mock.assert_has_calls(expected, any_order=True)
+        # the last one was closed with close(), not reconnect()
+        expected.extend([mock.call(brokers[0]),
+                         mock.call().open(),
+                         mock.call().session(),
+                         mock.call().close()])
+        conn_mock.assert_has_calls(expected)
 
 
 def synchronized(func):
@@ -758,84 +608,8 @@ class FakeQpidSession(object):
         key = slash_split[-1]
         return key.strip()
 
-    def close(self):
-        pass
-
 _fake_session = FakeQpidSession()
 
 
 def get_fake_qpid_session():
     return _fake_session
-
-
-class QPidHATestCase(test_utils.BaseTestCase):
-
-    @testtools.skipIf(qpid is None, "qpid not available")
-    def setUp(self):
-        super(QPidHATestCase, self).setUp()
-        self.brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
-
-        self.config(qpid_hosts=self.brokers,
-                    qpid_username=None,
-                    qpid_password=None)
-
-        hostname_sets = set()
-        self.info = {'attempt': 0,
-                     'fail': False}
-
-        def _connect(myself, broker):
-            # do as little work that is enough to pass connection attempt
-            myself.connection = mock.Mock()
-            hostname = broker['host']
-            self.assertNotIn(hostname, hostname_sets)
-            hostname_sets.add(hostname)
-
-            self.info['attempt'] += 1
-            if self.info['fail']:
-                raise qpid.messaging.exceptions.ConnectionError
-
-        # just make sure connection instantiation does not fail with an
-        # exception
-        self.stubs.Set(qpid_driver.Connection, '_connect', _connect)
-
-        # starting from the first broker in the list
-        url = messaging.TransportURL.parse(self.conf, None)
-        self.connection = qpid_driver.Connection(self.conf, url)
-        self.addCleanup(self.connection.close)
-
-        self.info.update({'attempt': 0,
-                          'fail': True})
-        hostname_sets.clear()
-
-    def test_reconnect_order(self):
-        self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.reconnect,
-                          retry=len(self.brokers) - 1)
-        self.assertEqual(len(self.brokers), self.info['attempt'])
-
-    def test_ensure_four_retries(self):
-        mock_callback = mock.Mock(
-            side_effect=qpid.messaging.exceptions.ConnectionError)
-        self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.ensure, None, mock_callback,
-                          retry=4)
-        self.assertEqual(5, self.info['attempt'])
-        self.assertEqual(1, mock_callback.call_count)
-
-    def test_ensure_one_retry(self):
-        mock_callback = mock.Mock(
-            side_effect=qpid.messaging.exceptions.ConnectionError)
-        self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.ensure, None, mock_callback,
-                          retry=1)
-        self.assertEqual(2, self.info['attempt'])
-        self.assertEqual(1, mock_callback.call_count)
-
-    def test_ensure_no_retry(self):
-        mock_callback = mock.Mock(
-            side_effect=qpid.messaging.exceptions.ConnectionError)
-        self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.ensure, None, mock_callback,
-                          retry=0)
-        self.assertEqual(1, self.info['attempt'])
-        self.assertEqual(1, mock_callback.call_count)

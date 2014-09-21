@@ -17,7 +17,6 @@ __all__ = ['AMQPDriverBase']
 
 import logging
 import threading
-import time
 import uuid
 
 from six import moves
@@ -64,10 +63,6 @@ class AMQPIncomingMessage(base.IncomingMessage):
             conn.direct_send(self.msg_id, rpc_common.serialize_msg(msg))
 
     def reply(self, reply=None, failure=None, log_failure=True):
-        if not self.msg_id:
-            # NOTE(Alexei_987) not sending reply, if msg_id is empty
-            #    because reply should not be expected by caller side
-            return
         with self.listener.driver._get_connection() as conn:
             self._send_reply(conn, reply, failure, log_failure=log_failure)
             self._send_reply(conn, ending=True)
@@ -108,24 +103,11 @@ class AMQPListener(base.Listener):
                                                  ctxt.msg_id,
                                                  ctxt.reply_q))
 
-    def poll(self, timeout=None):
-        if timeout is not None:
-            deadline = time.time() + timeout
-        else:
-            deadline = None
+    def poll(self):
         while True:
             if self.incoming:
                 return self.incoming.pop(0)
-            if deadline is not None:
-                timeout = deadline - time.time()
-                if timeout < 0:
-                    return None
-                try:
-                    self.conn.consume(limit=1, timeout=timeout)
-                except rpc_common.Timeout:
-                    return None
-            else:
-                self.conn.consume(limit=1)
+            self.conn.consume(limit=1)
 
 
 class ReplyWaiters(object):
@@ -155,7 +137,7 @@ class ReplyWaiters(object):
             LOG.warn('No calling threads waiting for msg_id : %(msg_id)s'
                      ', message : %(data)s', {'msg_id': msg_id,
                                               'data': message_data})
-            LOG.warn('_queues: %s', self._queues)
+            LOG.warn('_queues: %s' % str(self._queues))
         else:
             queue.put(message_data)
 
@@ -168,7 +150,7 @@ class ReplyWaiters(object):
         self._queues[msg_id] = queue
         if len(self._queues) > self._wrn_threshold:
             LOG.warn('Number of call queues is greater than warning '
-                     'threshold: %d. There could be a leak.',
+                     'threshold: %d. There could be a leak.' %
                      self._wrn_threshold)
             self._wrn_threshold *= 2
 
@@ -309,11 +291,17 @@ class ReplyWaiter(object):
 class AMQPDriverBase(base.BaseDriver):
 
     def __init__(self, conf, url, connection_pool,
-                 default_exchange=None, allowed_remote_exmods=None):
+                 default_exchange=None, allowed_remote_exmods=[]):
         super(AMQPDriverBase, self).__init__(conf, url, default_exchange,
                                              allowed_remote_exmods)
 
+        self._server_params = self._server_params_from_url(self._url)
+
         self._default_exchange = default_exchange
+
+        # FIXME(markmc): temp hack
+        if self._default_exchange:
+            self.conf.set_override('control_exchange', self._default_exchange)
 
         self._connection_pool = connection_pool
 
@@ -322,14 +310,35 @@ class AMQPDriverBase(base.BaseDriver):
         self._reply_q_conn = None
         self._waiter = None
 
-    def _get_exchange(self, target):
-        return target.exchange or self._default_exchange
+    def _server_params_from_url(self, url):
+        sp = {}
+
+        if url.virtual_host is not None:
+            sp['virtual_host'] = url.virtual_host
+
+        if url.hosts:
+            # FIXME(markmc): support multiple hosts
+            host = url.hosts[0]
+
+            sp['hostname'] = host.hostname
+            if host.port is not None:
+                sp['port'] = host.port
+            sp['username'] = host.username or ''
+            sp['password'] = host.password or ''
+
+        return sp
 
     def _get_connection(self, pooled=True):
+        # FIXME(markmc): we don't yet have a connection pool for each
+        # Transport instance, so we'll only use the pool with the
+        # transport configuration from the config file
+        server_params = self._server_params or None
+        if server_params:
+            pooled = False
         return rpc_amqp.ConnectionContext(self.conf,
-                                          self._url,
                                           self._connection_pool,
-                                          pooled=pooled)
+                                          pooled=pooled,
+                                          server_params=server_params)
 
     def _get_reply_q(self):
         with self._reply_q_lock:
@@ -350,7 +359,7 @@ class AMQPDriverBase(base.BaseDriver):
 
     def _send(self, target, ctxt, message,
               wait_for_reply=None, timeout=None,
-              envelope=True, notify=False, retry=None):
+              envelope=True, notify=False):
 
         # FIXME(markmc): remove this temporary hack
         class Context(object):
@@ -366,7 +375,7 @@ class AMQPDriverBase(base.BaseDriver):
         if wait_for_reply:
             msg_id = uuid.uuid4().hex
             msg.update({'_msg_id': msg_id})
-            LOG.debug('MSG_ID is %s', msg_id)
+            LOG.debug('MSG_ID is %s' % (msg_id))
             msg.update({'_reply_q': self._get_reply_q()})
 
         rpc_amqp._add_unique_id(msg)
@@ -381,17 +390,14 @@ class AMQPDriverBase(base.BaseDriver):
         try:
             with self._get_connection() as conn:
                 if notify:
-                    conn.notify_send(self._get_exchange(target),
-                                     target.topic, msg, retry=retry)
+                    conn.notify_send(target.topic, msg)
                 elif target.fanout:
-                    conn.fanout_send(target.topic, msg, retry=retry)
+                    conn.fanout_send(target.topic, msg)
                 else:
                     topic = target.topic
                     if target.server:
                         topic = '%s.%s' % (target.topic, target.server)
-                    conn.topic_send(exchange_name=self._get_exchange(target),
-                                    topic=topic, msg=msg, timeout=timeout,
-                                    retry=retry)
+                    conn.topic_send(topic, msg, timeout=timeout)
 
             if wait_for_reply:
                 result = self._waiter.wait(msg_id, timeout)
@@ -402,27 +408,21 @@ class AMQPDriverBase(base.BaseDriver):
             if wait_for_reply:
                 self._waiter.unlisten(msg_id)
 
-    def send(self, target, ctxt, message, wait_for_reply=None, timeout=None,
-             retry=None):
-        return self._send(target, ctxt, message, wait_for_reply, timeout,
-                          retry=retry)
+    def send(self, target, ctxt, message, wait_for_reply=None, timeout=None):
+        return self._send(target, ctxt, message, wait_for_reply, timeout)
 
-    def send_notification(self, target, ctxt, message, version, retry=None):
+    def send_notification(self, target, ctxt, message, version):
         return self._send(target, ctxt, message,
-                          envelope=(version == 2.0), notify=True, retry=retry)
+                          envelope=(version == 2.0), notify=True)
 
     def listen(self, target):
         conn = self._get_connection(pooled=False)
 
         listener = AMQPListener(self, conn)
 
-        conn.declare_topic_consumer(exchange_name=self._get_exchange(target),
-                                    topic=target.topic,
-                                    callback=listener)
-        conn.declare_topic_consumer(exchange_name=self._get_exchange(target),
-                                    topic='%s.%s' % (target.topic,
-                                                     target.server),
-                                    callback=listener)
+        conn.declare_topic_consumer(target.topic, listener)
+        conn.declare_topic_consumer('%s.%s' % (target.topic, target.server),
+                                    listener)
         conn.declare_fanout_consumer(target.topic, listener)
 
         return listener
@@ -432,10 +432,9 @@ class AMQPDriverBase(base.BaseDriver):
 
         listener = AMQPListener(self, conn)
         for target, priority in targets_and_priorities:
-            conn.declare_topic_consumer(
-                exchange_name=self._get_exchange(target),
-                topic='%s.%s' % (target.topic, priority),
-                callback=listener)
+            conn.declare_topic_consumer('%s.%s' % (target.topic, priority),
+                                        callback=listener,
+                                        exchange_name=target.exchange)
         return listener
 
     def cleanup(self):

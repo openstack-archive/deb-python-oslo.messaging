@@ -20,7 +20,7 @@ import testscenarios
 
 from oslo import messaging
 from oslo.messaging.notify import dispatcher as notify_dispatcher
-from oslo.utils import timeutils
+from oslo.messaging.openstack.common import timeutils
 from tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
@@ -101,10 +101,10 @@ class TestDispatcher(test_utils.BaseTestCase):
             targets, endpoints, None, allow_requeue=True)
 
         # check it listen on wanted topics
-        self.assertEqual(sorted(set((targets[0], prio)
+        self.assertEqual(sorted(dispatcher._targets_priorities),
+                         sorted(set((targets[0], prio)
                                     for prio in itertools.chain.from_iterable(
-                                        self.endpoints))),
-                         sorted(dispatcher._targets_priorities))
+                                        self.endpoints))))
 
         incoming = mock.Mock(ctxt={}, message=msg)
         with dispatcher(incoming) as callback:
@@ -115,27 +115,26 @@ class TestDispatcher(test_utils.BaseTestCase):
             for m in endpoint_methods:
                 if m == self.endpoints_expect_calls[i]:
                     method = getattr(endpoints[i], m)
-                    method.assert_called_once_with(
-                        {},
-                        msg['publisher_id'],
-                        msg['event_type'],
-                        msg['payload'], {
-                            'timestamp': mock.ANY,
-                            'message_id': mock.ANY
-                        })
+                    expected = [mock.call({}, msg['publisher_id'],
+                                          msg['event_type'],
+                                          msg['payload'], {
+                                              'timestamp': mock.ANY,
+                                              'message_id': mock.ANY
+                                          })]
+                    self.assertEqual(method.call_args_list, expected)
                 else:
-                    self.assertEqual(0, endpoints[i].call_count)
+                    self.assertEqual(endpoints[i].call_count, 0)
 
         if self.ex:
-            self.assertEqual(1, incoming.acknowledge.call_count)
-            self.assertEqual(0, incoming.requeue.call_count)
+            self.assertEqual(incoming.acknowledge.call_count, 1)
+            self.assertEqual(incoming.requeue.call_count, 0)
         elif self.return_value == messaging.NotificationResult.HANDLED \
                 or self.return_value is None:
-            self.assertEqual(1, incoming.acknowledge.call_count)
-            self.assertEqual(0, incoming.requeue.call_count)
+            self.assertEqual(incoming.acknowledge.call_count, 1)
+            self.assertEqual(incoming.requeue.call_count, 0)
         elif self.return_value == messaging.NotificationResult.REQUEUE:
-            self.assertEqual(0, incoming.acknowledge.call_count)
-            self.assertEqual(1, incoming.requeue.call_count)
+            self.assertEqual(incoming.acknowledge.call_count, 0)
+            self.assertEqual(incoming.requeue.call_count, 1)
 
     @mock.patch('oslo.messaging.notify.dispatcher.LOG')
     def test_dispatcher_unknown_prio(self, mylog):
@@ -145,5 +144,4 @@ class TestDispatcher(test_utils.BaseTestCase):
             [mock.Mock()], [mock.Mock()], None, allow_requeue=True)
         with dispatcher(mock.Mock(ctxt={}, message=msg)) as callback:
             callback()
-        mylog.warning.assert_called_once_with('Unknown priority "%s"',
-                                              'what???')
+        mylog.warning.assert_called_once_with('Unknown priority "what???"')

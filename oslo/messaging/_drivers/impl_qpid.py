@@ -16,20 +16,19 @@
 import functools
 import itertools
 import logging
-import random
 import time
 
+from oslo.config import cfg
 import six
 
-from oslo.config import cfg
 from oslo.messaging._drivers import amqp as rpc_amqp
 from oslo.messaging._drivers import amqpdriver
 from oslo.messaging._drivers import common as rpc_common
-from oslo.messaging import exceptions
-from oslo.messaging.openstack.common.gettextutils import _
+from oslo.messaging.openstack.common import importutils
 from oslo.messaging.openstack.common import jsonutils
-from oslo.utils import importutils
-from oslo.utils import netutils
+
+# FIXME(markmc): remove this
+_ = lambda s: s
 
 qpid_codec = importutils.try_import("qpid.codec010")
 qpid_messaging = importutils.try_import("qpid.messaging")
@@ -67,9 +66,6 @@ qpid_opts = [
     cfg.BoolOpt('qpid_tcp_nodelay',
                 default=True,
                 help='Whether to disable the Nagle algorithm.'),
-    cfg.IntOpt('qpid_receiver_capacity',
-               default=1,
-               help='The number of prefetched messages held by receiver.'),
     # NOTE(russellb) If any additional versions are added (beyond 1 and 2),
     # this file could probably use some additional refactoring so that the
     # differences between each version are split into different classes.
@@ -126,7 +122,6 @@ class ConsumerBase(object):
         """
         self.callback = callback
         self.receiver = None
-        self.rcv_capacity = conf.qpid_receiver_capacity
         self.session = None
 
         if conf.qpid_topology_version == 1:
@@ -180,7 +175,7 @@ class ConsumerBase(object):
     def _declare_receiver(self, session):
         self.session = session
         self.receiver = session.receiver(self.address)
-        self.receiver.capacity = self.rcv_capacity
+        self.receiver.capacity = 1
 
     def _unpack_json_msg(self, msg):
         """Load the JSON data in msg if msg.content_type indicates that it
@@ -251,8 +246,8 @@ class DirectConsumer(ConsumerBase):
 class TopicConsumer(ConsumerBase):
     """Consumer class for 'topic'."""
 
-    def __init__(self, conf, session, topic, callback, exchange_name,
-                 name=None):
+    def __init__(self, conf, session, topic, callback, name=None,
+                 exchange_name=None):
         """Init a 'topic' queue.
 
         :param session: the amqp session to use
@@ -262,6 +257,7 @@ class TopicConsumer(ConsumerBase):
         :param name: optional queue name, defaults to topic
         """
 
+        exchange_name = exchange_name or rpc_amqp.get_control_exchange(conf)
         link_opts = {
             "auto-delete": conf.amqp_auto_delete,
             "durable": conf.amqp_durable_queues,
@@ -378,14 +374,14 @@ class Publisher(object):
 
 class DirectPublisher(Publisher):
     """Publisher class for 'direct'."""
-    def __init__(self, conf, session, topic):
+    def __init__(self, conf, session, msg_id):
         """Init a 'direct' publisher."""
 
         if conf.qpid_topology_version == 1:
-            node_name = "%s/%s" % (topic, topic)
+            node_name = "%s/%s" % (msg_id, msg_id)
             node_opts = {"type": "direct"}
         elif conf.qpid_topology_version == 2:
-            node_name = "amq.direct/%s" % topic
+            node_name = "amq.direct/%s" % msg_id
             node_opts = {}
         else:
             raise_invalid_topology_version(conf)
@@ -396,9 +392,11 @@ class DirectPublisher(Publisher):
 
 class TopicPublisher(Publisher):
     """Publisher class for 'topic'."""
-    def __init__(self, conf, session, exchange_name, topic):
+    def __init__(self, conf, session, topic):
         """Init a 'topic' publisher.
         """
+        exchange_name = rpc_amqp.get_control_exchange(conf)
+
         if conf.qpid_topology_version == 1:
             node_name = "%s/%s" % (exchange_name, topic)
         elif conf.qpid_topology_version == 2:
@@ -430,9 +428,10 @@ class FanoutPublisher(Publisher):
 
 class NotifyPublisher(Publisher):
     """Publisher class for notifications."""
-    def __init__(self, conf, session, exchange_name, topic):
+    def __init__(self, conf, session, topic):
         """Init a 'topic' publisher.
         """
+        exchange_name = rpc_amqp.get_control_exchange(conf)
         node_opts = {"durable": True}
 
         if conf.qpid_topology_version == 1:
@@ -449,9 +448,9 @@ class NotifyPublisher(Publisher):
 class Connection(object):
     """Connection object."""
 
-    pools = {}
+    pool = None
 
-    def __init__(self, conf, url):
+    def __init__(self, conf, server_params=None):
         if not qpid_messaging:
             raise ImportError("Failed to import qpid.messaging")
 
@@ -460,44 +459,34 @@ class Connection(object):
         self.consumers = {}
         self.conf = conf
 
-        self.brokers_params = []
-        if url.hosts:
-            for host in url.hosts:
-                params = {
-                    'username': host.username or '',
-                    'password': host.password or '',
-                }
-                if host.port is not None:
-                    params['host'] = '%s:%d' % (host.hostname, host.port)
-                else:
-                    params['host'] = host.hostname
-                self.brokers_params.append(params)
-        else:
-            # Old configuration format
-            for adr in self.conf.qpid_hosts:
-                hostname, port = netutils.parse_host_port(
-                    adr, default_port=5672)
+        if server_params and 'hostname' in server_params:
+            # NOTE(russellb) This enables support for cast_to_server.
+            server_params['qpid_hosts'] = [
+                '%s:%d' % (server_params['hostname'],
+                           server_params.get('port', 5672))
+            ]
 
-                params = {
-                    'host': '%s:%d' % (hostname, port),
-                    'username': self.conf.qpid_username,
-                    'password': self.conf.qpid_password,
-                }
-                self.brokers_params.append(params)
+        params = {
+            'qpid_hosts': self.conf.qpid_hosts,
+            'username': self.conf.qpid_username,
+            'password': self.conf.qpid_password,
+        }
+        params.update(server_params or {})
 
-        random.shuffle(self.brokers_params)
-        self.brokers = itertools.cycle(self.brokers_params)
+        self.brokers = itertools.cycle(params['qpid_hosts'])
 
+        self.username = params['username']
+        self.password = params['password']
         self.reconnect()
 
-    def _connect(self, broker):
+    def connection_create(self, broker):
         # Create the connection - this does not open the connection
-        self.connection = qpid_messaging.Connection(broker['host'])
+        self.connection = qpid_messaging.Connection(broker)
 
         # Check if flags are set and if so set them for the connection
         # before we call open
-        self.connection.username = broker['username']
-        self.connection.password = broker['password']
+        self.connection.username = self.username
+        self.connection.password = self.password
 
         self.connection.sasl_mechanisms = self.conf.qpid_sasl_mechanisms
         # Reconnection is done by self.reconnect()
@@ -505,62 +494,38 @@ class Connection(object):
         self.connection.heartbeat = self.conf.qpid_heartbeat
         self.connection.transport = self.conf.qpid_protocol
         self.connection.tcp_nodelay = self.conf.qpid_tcp_nodelay
-        self.connection.open()
 
     def _register_consumer(self, consumer):
-        self.consumers[six.text_type(consumer.get_receiver())] = consumer
+        self.consumers[str(consumer.get_receiver())] = consumer
 
     def _lookup_consumer(self, receiver):
-        return self.consumers[six.text_type(receiver)]
+        return self.consumers[str(receiver)]
 
-    def _disconnect(self):
-        # Close the session if necessary
-        if self.connection is not None and self.connection.opened():
-            try:
-                self.connection.close()
-            except qpid_exceptions.MessagingError:
-                pass
-        self.connection = None
-
-    def reconnect(self, retry=None):
-        """Handles reconnecting and re-establishing sessions and queues.
-        Will retry up to retry number of times.
-        retry = None or -1 means to retry forever
-        retry = 0 means no retry
-        retry = N means N retries
-        """
+    def reconnect(self):
+        """Handles reconnecting and re-establishing sessions and queues."""
         delay = 1
-        attempt = 0
-        loop_forever = False
-        if retry is None or retry < 0:
-            loop_forever = True
-
         while True:
-            self._disconnect()
+            # Close the session if necessary
+            if self.connection is not None and self.connection.opened():
+                try:
+                    self.connection.close()
+                except qpid_exceptions.MessagingError:
+                    pass
 
-            attempt += 1
             broker = six.next(self.brokers)
+
             try:
-                self._connect(broker)
+                self.connection_create(broker)
+                self.connection.open()
             except qpid_exceptions.MessagingError as e:
-                msg_dict = dict(e=e,
-                                delay=delay,
-                                retry=retry,
-                                broker=broker)
-                if not loop_forever and attempt > retry:
-                    msg = _('Unable to connect to AMQP server on '
-                            '%(broker)s after %(retry)d '
-                            'tries: %(e)s') % msg_dict
-                    LOG.error(msg)
-                    raise exceptions.MessageDeliveryFailure(msg)
-                else:
-                    msg = _("Unable to connect to AMQP server on %(broker)s: "
-                            "%(e)s. Sleeping %(delay)s seconds") % msg_dict
-                    LOG.error(msg)
-                    time.sleep(delay)
-                    delay = min(delay + 1, 5)
+                msg_dict = dict(e=e, delay=delay)
+                msg = _("Unable to connect to AMQP server: %(e)s. "
+                        "Sleeping %(delay)s seconds") % msg_dict
+                LOG.error(msg)
+                time.sleep(delay)
+                delay = min(delay + 1, 5)
             else:
-                LOG.info(_('Connected to AMQP server on %s'), broker['host'])
+                LOG.info(_('Connected to AMQP server on %s'), broker)
                 break
 
         self.session = self.connection.session()
@@ -573,17 +538,17 @@ class Connection(object):
                 consumer.reconnect(self.session)
                 self._register_consumer(consumer)
 
-            LOG.debug("Re-established AMQP queues")
+            LOG.debug(_("Re-established AMQP queues"))
 
-    def ensure(self, error_callback, method, retry=None):
+    def ensure(self, error_callback, method, *args, **kwargs):
         while True:
             try:
-                return method()
+                return method(*args, **kwargs)
             except (qpid_exceptions.Empty,
                     qpid_exceptions.MessagingError) as e:
                 if error_callback:
                     error_callback(e)
-                self.reconnect(retry=retry)
+                self.reconnect()
 
     def close(self):
         """Close/release this connection."""
@@ -607,9 +572,9 @@ class Connection(object):
         add it to our list of consumers
         """
         def _connect_error(exc):
-            log_info = {'topic': topic, 'err_str': exc}
+            log_info = {'topic': topic, 'err_str': str(exc)}
             LOG.error(_("Failed to declare consumer for topic '%(topic)s': "
-                        "%(err_str)s"), log_info)
+                      "%(err_str)s") % log_info)
 
         def _declare_consumer():
             consumer = consumer_cls(self.conf, self.session, topic, callback)
@@ -623,11 +588,12 @@ class Connection(object):
 
         def _error_callback(exc):
             if isinstance(exc, qpid_exceptions.Empty):
-                LOG.debug('Timed out waiting for RPC response: %s', exc)
+                LOG.debug(_('Timed out waiting for RPC response: %s') %
+                          str(exc))
                 raise rpc_common.Timeout()
             else:
-                LOG.exception(_('Failed to consume message from queue: %s'),
-                              exc)
+                LOG.exception(_('Failed to consume message from queue: %s') %
+                              str(exc))
 
         def _consume():
             nxt_receiver = self.session.next_receiver(timeout=timeout)
@@ -641,19 +607,19 @@ class Connection(object):
                 raise StopIteration
             yield self.ensure(_error_callback, _consume)
 
-    def publisher_send(self, cls, topic, msg, retry=None, **kwargs):
+    def publisher_send(self, cls, topic, msg):
         """Send to a publisher based on the publisher class."""
 
         def _connect_error(exc):
-            log_info = {'topic': topic, 'err_str': exc}
+            log_info = {'topic': topic, 'err_str': str(exc)}
             LOG.exception(_("Failed to publish message to topic "
-                          "'%(topic)s': %(err_str)s"), log_info)
+                          "'%(topic)s': %(err_str)s") % log_info)
 
         def _publisher_send():
-            publisher = cls(self.conf, self.session, topic=topic, **kwargs)
+            publisher = cls(self.conf, self.session, topic)
             publisher.send(msg)
 
-        return self.ensure(_connect_error, _publisher_send, retry=retry)
+        return self.ensure(_connect_error, _publisher_send)
 
     def declare_direct_consumer(self, topic, callback):
         """Create a 'direct' queue.
@@ -662,8 +628,8 @@ class Connection(object):
         """
         self.declare_consumer(DirectConsumer, topic, callback)
 
-    def declare_topic_consumer(self, exchange_name, topic, callback=None,
-                               queue_name=None):
+    def declare_topic_consumer(self, topic, callback=None, queue_name=None,
+                               exchange_name=None):
         """Create a 'topic' consumer."""
         self.declare_consumer(functools.partial(TopicConsumer,
                                                 name=queue_name,
@@ -677,12 +643,12 @@ class Connection(object):
 
     def direct_send(self, msg_id, msg):
         """Send a 'direct' message."""
-        self.publisher_send(DirectPublisher, topic=msg_id, msg=msg)
+        self.publisher_send(DirectPublisher, msg_id, msg)
 
-    def topic_send(self, exchange_name, topic, msg, timeout=None, retry=None):
+    def topic_send(self, topic, msg, timeout=None):
         """Send a 'topic' message."""
         #
-        # We want to create a message with attributes, for example a TTL. We
+        # We want to create a message with attributes, e.g. a TTL. We
         # don't really need to keep 'msg' in its JSON format any longer
         # so let's create an actual Qpid message here and get some
         # value-add on the go.
@@ -692,17 +658,15 @@ class Connection(object):
         # will need to be altered accordingly.
         #
         qpid_message = qpid_messaging.Message(content=msg, ttl=timeout)
-        self.publisher_send(TopicPublisher, topic=topic, msg=qpid_message,
-                            exchange_name=exchange_name, retry=retry)
+        self.publisher_send(TopicPublisher, topic, qpid_message)
 
-    def fanout_send(self, topic, msg, retry=None):
+    def fanout_send(self, topic, msg):
         """Send a 'fanout' message."""
-        self.publisher_send(FanoutPublisher, topic=topic, msg=msg, retry=retry)
+        self.publisher_send(FanoutPublisher, topic, msg)
 
-    def notify_send(self, exchange_name, topic, msg, retry=None, **kwargs):
+    def notify_send(self, topic, msg, **kwargs):
         """Send a notify message on a topic."""
-        self.publisher_send(NotifyPublisher, topic=topic, msg=msg,
-                            exchange_name=exchange_name, retry=retry)
+        self.publisher_send(NotifyPublisher, topic, msg)
 
     def consume(self, limit=None, timeout=None):
         """Consume from all queues/consumers."""
@@ -717,11 +681,11 @@ class Connection(object):
 class QpidDriver(amqpdriver.AMQPDriverBase):
 
     def __init__(self, conf, url,
-                 default_exchange=None, allowed_remote_exmods=None):
+                 default_exchange=None, allowed_remote_exmods=[]):
         conf.register_opts(qpid_opts)
         conf.register_opts(rpc_amqp.amqp_opts)
 
-        connection_pool = rpc_amqp.get_connection_pool(conf, url, Connection)
+        connection_pool = rpc_amqp.get_connection_pool(conf, Connection)
 
         super(QpidDriver, self).__init__(conf, url,
                                          connection_pool,

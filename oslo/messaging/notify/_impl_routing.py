@@ -16,11 +16,11 @@
 import fnmatch
 import logging
 
+from oslo.config import cfg
 import six
 from stevedore import dispatch
 import yaml
 
-from oslo.config import cfg
 from oslo.messaging.notify import notifier
 from oslo.messaging.openstack.common.gettextutils import _  # noqa
 
@@ -70,15 +70,17 @@ class RoutingDriver(notifier._Driver):
         for group in self.routing_groups.values():
             self.used_drivers.update(group.keys())
 
-        LOG.debug('loading notifiers from %s', self.NOTIFIER_PLUGIN_NAMESPACE)
+        LOG.debug(_('loading notifiers from %(namespace)s') %
+                  {'namespace': self.NOTIFIER_PLUGIN_NAMESPACE})
         self.plugin_manager = dispatch.DispatchExtensionManager(
             namespace=self.NOTIFIER_PLUGIN_NAMESPACE,
             check_func=self._should_load_plugin,
             invoke_on_load=True,
             invoke_args=None)
         if not list(self.plugin_manager):
-            LOG.warning(_("Failed to load any notifiers for %s"),
-                        self.NOTIFIER_PLUGIN_NAMESPACE)
+            LOG.warning(_("Failed to load any notifiers "
+                          "for %(namespace)s") %
+                        {'namespace': self.NOTIFIER_PLUGIN_NAMESPACE})
 
     def _get_drivers_for_message(self, group, event_type, priority):
         """Which drivers should be called for this event_type
@@ -102,34 +104,33 @@ class RoutingDriver(notifier._Driver):
 
         return list(accepted_drivers)
 
-    def _filter_func(self, ext, context, message, priority, retry,
-                     accepted_drivers):
+    def _filter_func(self, ext, context, message, accepted_drivers):
         """True/False if the driver should be called for this message.
         """
         # context is unused here, but passed in by map()
         return ext.name in accepted_drivers
 
-    def _call_notify(self, ext, context, message, priority, retry,
-                     accepted_drivers):
+    def _call_notify(self, ext, context, message, accepted_drivers):
         """Emit the notification.
         """
         # accepted_drivers is passed in as a result of the map() function
-        LOG.info(_("Routing '%(event)s' notification to '%(driver)s' driver"),
+        LOG.info(_("Routing '%(event)s' notification to '%(driver)s' driver") %
                  {'event': message.get('event_type'), 'driver': ext.name})
-        ext.obj.notify(context, message, priority, retry)
+        ext.obj.notify(context, message)
 
-    def notify(self, context, message, priority, retry):
+    def notify(self, context, message):
         if not self.plugin_manager:
             self._load_notifiers()
 
         # Fail if these aren't present ...
         event_type = message['event_type']
+        priority = message['priority'].lower()
 
         accepted_drivers = set()
         for group in self.routing_groups.values():
-            accepted_drivers.update(
-                self._get_drivers_for_message(group, event_type,
-                                              priority.lower()))
+            accepted_drivers.update(self._get_drivers_for_message(group,
+                                                                  event_type,
+                                                                  priority))
+
         self.plugin_manager.map(self._filter_func, self._call_notify, context,
-                                message, priority, retry,
-                                list(accepted_drivers))
+                                message, list(accepted_drivers))

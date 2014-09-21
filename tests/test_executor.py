@@ -15,21 +15,14 @@
 #    under the License.
 
 import contextlib
+import eventlet
 import threading
 
-try:
-    import eventlet
-except ImportError:
-    eventlet = None
 import mock
 import testscenarios
-import testtools
 
 from oslo.messaging._executors import impl_blocking
-try:
-    from oslo.messaging._executors import impl_eventlet
-except ImportError:
-    impl_eventlet = None
+from oslo.messaging._executors import impl_eventlet
 from tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
@@ -37,15 +30,14 @@ load_tests = testscenarios.load_tests_apply_scenarios
 
 class TestExecutor(test_utils.BaseTestCase):
 
+    _impl = [('blocking', dict(executor=impl_blocking.BlockingExecutor,
+                               stop_before_return=True)),
+             ('eventlet', dict(executor=impl_eventlet.EventletExecutor,
+                               stop_before_return=False))]
+
     @classmethod
     def generate_scenarios(cls):
-        impl = [('blocking', dict(executor=impl_blocking.BlockingExecutor,
-                                  stop_before_return=True))]
-        if impl_eventlet is not None:
-            impl.append(
-                ('eventlet', dict(executor=impl_eventlet.EventletExecutor,
-                                  stop_before_return=False)))
-        cls.scenarios = testscenarios.multiply_scenarios(impl)
+        cls.scenarios = testscenarios.multiply_scenarios(cls._impl)
 
     @staticmethod
     def _run_in_thread(executor):
@@ -94,7 +86,6 @@ class ExceptedException(Exception):
 
 
 class EventletContextManagerSpawnTest(test_utils.BaseTestCase):
-    @testtools.skipIf(impl_eventlet is None, "Eventlet not available")
     def setUp(self):
         super(EventletContextManagerSpawnTest, self).setUp()
         self.before = mock.Mock()
@@ -116,10 +107,10 @@ class EventletContextManagerSpawnTest(test_utils.BaseTestCase):
     def test_normal_run(self):
         thread = impl_eventlet.spawn_with(self.mgr, pool=eventlet)
         thread.wait()
-        self.assertEqual(1, self.before.call_count)
-        self.assertEqual(1, self.callback.call_count)
-        self.assertEqual(1, self.after.call_count)
-        self.assertEqual(0, self.exception_call.call_count)
+        self.assertEqual(self.before.call_count, 1)
+        self.assertEqual(self.callback.call_count, 1)
+        self.assertEqual(self.after.call_count, 1)
+        self.assertEqual(self.exception_call.call_count, 0)
 
     def test_excepted_exception(self):
         self.callback.side_effect = ExceptedException
@@ -128,10 +119,10 @@ class EventletContextManagerSpawnTest(test_utils.BaseTestCase):
             thread.wait()
         except ExceptedException:
             pass
-        self.assertEqual(1, self.before.call_count)
-        self.assertEqual(1, self.callback.call_count)
-        self.assertEqual(1, self.after.call_count)
-        self.assertEqual(1, self.exception_call.call_count)
+        self.assertEqual(self.before.call_count, 1)
+        self.assertEqual(self.callback.call_count, 1)
+        self.assertEqual(self.after.call_count, 1)
+        self.assertEqual(self.exception_call.call_count, 1)
 
     def test_unexcepted_exception(self):
         self.callback.side_effect = Exception
@@ -140,7 +131,7 @@ class EventletContextManagerSpawnTest(test_utils.BaseTestCase):
             thread.wait()
         except Exception:
             pass
-        self.assertEqual(1, self.before.call_count)
-        self.assertEqual(1, self.callback.call_count)
-        self.assertEqual(0, self.after.call_count)
-        self.assertEqual(0, self.exception_call.call_count)
+        self.assertEqual(self.before.call_count, 1)
+        self.assertEqual(self.callback.call_count, 1)
+        self.assertEqual(self.after.call_count, 0)
+        self.assertEqual(self.exception_call.call_count, 0)

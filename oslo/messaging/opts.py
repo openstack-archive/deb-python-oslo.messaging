@@ -21,13 +21,13 @@ import copy
 import itertools
 
 from oslo.messaging._drivers import amqp
+from oslo.messaging._drivers import common as drivers_common
 from oslo.messaging._drivers import impl_qpid
 from oslo.messaging._drivers import impl_rabbit
 from oslo.messaging._drivers import impl_zmq
 from oslo.messaging._drivers import matchmaker
 from oslo.messaging._drivers import matchmaker_redis
 from oslo.messaging._drivers import matchmaker_ring
-from oslo.messaging._drivers.protocols.amqp import driver as amqp1_driver
 from oslo.messaging._executors import impl_eventlet
 from oslo.messaging.notify import notifier
 from oslo.messaging.rpc import client
@@ -35,20 +35,20 @@ from oslo.messaging import transport
 
 _global_opt_lists = [
     amqp.amqp_opts,
+    drivers_common._exception_opts,
     impl_qpid.qpid_opts,
     impl_rabbit.rabbit_opts,
     impl_zmq.zmq_opts,
     matchmaker.matchmaker_opts,
+    matchmaker_redis.matchmaker_redis_opts,
     impl_eventlet._eventlet_opts,
     notifier._notifier_opts,
     client._client_opts,
-    transport._transport_opts,
-    amqp1_driver.get_opts()
+    transport._transport_opts
 ]
 
 _opts = [
     (None, list(itertools.chain(*_global_opt_lists))),
-    ('matchmaker_redis', matchmaker_redis.matchmaker_redis_opts),
     ('matchmaker_ring', matchmaker_ring.matchmaker_opts),
 ]
 
