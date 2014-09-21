@@ -1,4 +1,4 @@
-oslo.messaging (1.4.0.0-1) experimental; urgency=medium
+oslo.messaging (1.4.0.0-1) unstable; urgency=medium
 
   * New upstream release.
   * Note that this really is 1.4.0, though because of previous upload to
