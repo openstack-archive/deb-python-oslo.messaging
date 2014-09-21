@@ -1,3 +1,10 @@
+oslo.messaging (1.4.0.0+really+1.3.1-1) unstable; urgency=medium
+
+  * Repairing wrong upload to unstable (this was due to a wrong release of
+    keystone upstream).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 21 Sep 2014 16:18:49 +0000
+
 oslo.messaging (1.4.0.0-1) unstable; urgency=medium
 
   * New upstream release.
