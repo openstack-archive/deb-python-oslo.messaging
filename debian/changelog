@@ -1,3 +1,10 @@
+oslo.messaging (1.4.1-1) experimental; urgency=medium
+
+  * New upstream release, which is in fact the same as 1.4.0, though this fixes
+    the mess with version numbers. Thanks a lot to Doug Hellmann for it.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 23 Sep 2014 15:12:40 +0000
+
 oslo.messaging (1.4.0.0-2) experimental; urgency=medium
 
   * Uploading to experimental. Version 1.4 should never have been uploaded
