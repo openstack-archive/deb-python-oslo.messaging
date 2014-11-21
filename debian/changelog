@@ -1,3 +1,9 @@
+oslo.messaging (1.4.0.0+really+1.3.1-2) unstable; urgency=medium
+
+  * Removed the use of PROTOCOL_SSLv3 which is gone from Python.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 21 Nov 2014 09:50:49 +0000
+
 oslo.messaging (1.4.0.0+really+1.3.1-1) unstable; urgency=medium
 
   * Repairing wrong upload to unstable (this was due to a wrong release of
