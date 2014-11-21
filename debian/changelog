@@ -1,3 +1,9 @@
+oslo.messaging (1.4.1-2) experimental; urgency=medium
+
+  * Added remove-PROTOCOL_SSLv3.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 21 Nov 2014 10:01:03 +0000
+
 oslo.messaging (1.4.1-1) experimental; urgency=medium
 
   * New upstream release, which is in fact the same as 1.4.0, though this fixes

@@ -1,0 +1,21 @@
+Description: Remove the use of ssl.PROTOCOL_SSLv3
+ The ssl.PROTOCOL_SSLv3 support has been removed from Python and OpenSSL,
+ which broke completely oslo.messaging. This patch fixes it.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: https://review.openstack.org/136278
+Last-Update: 2014-11-21
+
+Index: oslo.messaging/oslo/messaging/_drivers/impl_rabbit.py
+===================================================================
+--- oslo.messaging.orig/oslo/messaging/_drivers/impl_rabbit.py
++++ oslo.messaging/oslo/messaging/_drivers/impl_rabbit.py
+@@ -493,8 +493,7 @@ class Connection(object):
+     # FIXME(markmc): use oslo sslutils when it is available as a library
+     _SSL_PROTOCOLS = {
+         "tlsv1": ssl.PROTOCOL_TLSv1,
+-        "sslv23": ssl.PROTOCOL_SSLv23,
+-        "sslv3": ssl.PROTOCOL_SSLv3
++        "sslv23": ssl.PROTOCOL_SSLv23
+     }
+ 
+     try:
