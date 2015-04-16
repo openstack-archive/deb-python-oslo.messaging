@@ -14,15 +14,16 @@
 #    under the License.
 
 import fixtures
-from mox3 import mox
 import six
+from six.moves import mox
 from stevedore import driver
 import testscenarios
 
 from oslo.config import cfg
 from oslo import messaging
 from oslo.messaging import transport
-from tests import utils as test_utils
+from oslo_messaging.tests import utils as test_utils
+from oslo_messaging import transport as private_transport
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
@@ -241,7 +242,7 @@ class TestSetDefaults(test_utils.BaseTestCase):
     def setUp(self):
         super(TestSetDefaults, self).setUp(conf=cfg.ConfigOpts())
         self.useFixture(_SetDefaultsFixture(messaging.set_transport_defaults,
-                                            transport._transport_opts,
+                                            private_transport._transport_opts,
                                             'control_exchange'))
 
     def test_set_default_control_exchange(self):

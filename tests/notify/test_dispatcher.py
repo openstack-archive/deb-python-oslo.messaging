@@ -16,12 +16,12 @@
 import itertools
 
 import mock
+from oslo_utils import timeutils
 import testscenarios
 
 from oslo import messaging
 from oslo.messaging.notify import dispatcher as notify_dispatcher
-from oslo.utils import timeutils
-from tests import utils as test_utils
+from oslo_messaging.tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
@@ -35,7 +35,7 @@ notification_msg = dict(
 )
 
 
-class TestDispatcher(test_utils.BaseTestCase):
+class TestDispatcherScenario(test_utils.BaseTestCase):
 
     scenarios = [
         ('no_endpoints',
@@ -98,7 +98,7 @@ class TestDispatcher(test_utils.BaseTestCase):
 
         targets = [messaging.Target(topic='notifications')]
         dispatcher = notify_dispatcher.NotificationDispatcher(
-            targets, endpoints, None, allow_requeue=True)
+            targets, endpoints, None, allow_requeue=True, pool=None)
 
         # check it listen on wanted topics
         self.assertEqual(sorted(set((targets[0], prio)
@@ -137,13 +137,35 @@ class TestDispatcher(test_utils.BaseTestCase):
             self.assertEqual(0, incoming.acknowledge.call_count)
             self.assertEqual(1, incoming.requeue.call_count)
 
-    @mock.patch('oslo.messaging.notify.dispatcher.LOG')
+
+class TestDispatcher(test_utils.BaseTestCase):
+
+    @mock.patch('oslo_messaging.notify.dispatcher.LOG')
     def test_dispatcher_unknown_prio(self, mylog):
         msg = notification_msg.copy()
         msg['priority'] = 'what???'
         dispatcher = notify_dispatcher.NotificationDispatcher(
-            [mock.Mock()], [mock.Mock()], None, allow_requeue=True)
+            [mock.Mock()], [mock.Mock()], None, allow_requeue=True, pool=None)
         with dispatcher(mock.Mock(ctxt={}, message=msg)) as callback:
             callback()
         mylog.warning.assert_called_once_with('Unknown priority "%s"',
                                               'what???')
+
+    def test_dispatcher_executor_callback(self):
+        endpoint = mock.Mock(spec=['warn'])
+        endpoint_method = endpoint.warn
+        endpoint_method.return_value = messaging.NotificationResult.HANDLED
+
+        targets = [messaging.Target(topic='notifications')]
+        dispatcher = notify_dispatcher.NotificationDispatcher(
+            targets, [endpoint], None, allow_requeue=True)
+
+        msg = notification_msg.copy()
+        msg['priority'] = 'warn'
+
+        incoming = mock.Mock(ctxt={}, message=msg)
+        executor_callback = mock.Mock()
+        with dispatcher(incoming, executor_callback) as callback:
+            callback()
+        self.assertTrue(executor_callback.called)
+        self.assertEqual(executor_callback.call_args[0][0], endpoint_method)

@@ -13,123 +13,157 @@
 #    under the License.
 
 import datetime
-import operator
 import sys
 import threading
+import time
 import uuid
 
 import fixtures
 import kombu
 import mock
+from oslotest import mockpatch
 import testscenarios
 
+from oslo.config import cfg
 from oslo import messaging
-from oslo.messaging._drivers import amqpdriver
-from oslo.messaging._drivers import common as driver_common
-from oslo.messaging._drivers import impl_rabbit as rabbit_driver
-from oslo.messaging.openstack.common import jsonutils
-from tests import utils as test_utils
+from oslo.serialization import jsonutils
+from oslo_messaging._drivers import amqp
+from oslo_messaging._drivers import amqpdriver
+from oslo_messaging._drivers import common as driver_common
+from oslo_messaging._drivers import impl_rabbit as rabbit_driver
+from oslo_messaging.tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
 
-class TestRabbitDriverLoad(test_utils.BaseTestCase):
+class TestDeprecatedRabbitDriverLoad(test_utils.BaseTestCase):
 
     def setUp(self):
-        super(TestRabbitDriverLoad, self).setUp()
+        super(TestDeprecatedRabbitDriverLoad, self).setUp(
+            conf=cfg.ConfigOpts())
         self.messaging_conf.transport_driver = 'rabbit'
-        self.messaging_conf.in_memory = True
+        self.config(fake_rabbit=True, group="oslo_messaging_rabbit")
 
     def test_driver_load(self):
+        self.config(heartbeat_timeout_threshold=0,
+                    group='oslo_messaging_rabbit')
         transport = messaging.get_transport(self.conf)
-        self.assertIsInstance(transport._driver, rabbit_driver.RabbitDriver)
+        self.addCleanup(transport.cleanup)
+        driver = transport._driver
+        url = driver._get_connection()._url
+
+        self.assertIsInstance(driver, rabbit_driver.RabbitDriver)
+        self.assertEqual('memory:////', url)
+
+
+class TestRabbitDriverLoad(test_utils.BaseTestCase):
+
+    scenarios = [
+        ('rabbit', dict(transport_driver='rabbit',
+                        url='amqp://guest:guest@localhost:5672//')),
+        ('kombu', dict(transport_driver='kombu',
+                       url='amqp://guest:guest@localhost:5672//')),
+        ('rabbit+memory', dict(transport_driver='kombu+memory',
+                               url='memory:///'))
+    ]
+
+    @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.ensure')
+    @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.reset')
+    def test_driver_load(self, fake_ensure, fake_reset):
+        self.config(heartbeat_timeout_threshold=0,
+                    group='oslo_messaging_rabbit')
+        self.messaging_conf.transport_driver = self.transport_driver
+        transport = messaging.get_transport(self.conf)
+        self.addCleanup(transport.cleanup)
+        driver = transport._driver
+        url = driver._get_connection()._url
+
+        self.assertIsInstance(driver, rabbit_driver.RabbitDriver)
+        self.assertEqual(self.url, url)
+
+
+class TestRabbitIterconsume(test_utils.BaseTestCase):
+
+    def test_iterconsume_timeout(self):
+        transport = messaging.get_transport(self.conf, 'kombu+memory:////')
+        self.addCleanup(transport.cleanup)
+        deadline = time.time() + 3
+        with transport._driver._get_connection(amqp.PURPOSE_LISTEN) as conn:
+            conn.iterconsume(timeout=3)
+            # kombu memory transport doesn't really raise error
+            # so just simulate a real driver behavior
+            conn.connection.connection.recoverable_channel_errors = (IOError,)
+            conn.declare_fanout_consumer("notif.info", lambda msg: True)
+            with mock.patch('kombu.connection.Connection.drain_events',
+                            side_effect=IOError):
+                try:
+                    conn.consume(timeout=3)
+                except driver_common.Timeout:
+                    pass
+
+        self.assertEqual(0, int(deadline - time.time()))
 
 
 class TestRabbitTransportURL(test_utils.BaseTestCase):
 
     scenarios = [
         ('none', dict(url=None,
-                      expected=[dict(hostname='localhost',
-                                     port=5672,
-                                     userid='guest',
-                                     password='guest',
-                                     virtual_host='/')])),
+                      expected=["amqp://guest:guest@localhost:5672//"])),
+        ('memory', dict(url='kombu+memory:////',
+                        expected=["memory:///"])),
         ('empty',
          dict(url='rabbit:///',
-              expected=[dict(hostname='localhost',
-                             port=5672,
-                             userid='guest',
-                             password='guest',
-                             virtual_host='')])),
+              expected=['amqp://guest:guest@localhost:5672/'])),
         ('localhost',
          dict(url='rabbit://localhost/',
-              expected=[dict(hostname='localhost',
-                             port=5672,
-                             userid='',
-                             password='',
-                             virtual_host='')])),
+              expected=['amqp://:@localhost:5672/'])),
         ('virtual_host',
          dict(url='rabbit:///vhost',
-              expected=[dict(hostname='localhost',
-                             port=5672,
-                             userid='guest',
-                             password='guest',
-                             virtual_host='vhost')])),
+              expected=['amqp://guest:guest@localhost:5672/vhost'])),
         ('no_creds',
          dict(url='rabbit://host/virtual_host',
-              expected=[dict(hostname='host',
-                             port=5672,
-                             userid='',
-                             password='',
-                             virtual_host='virtual_host')])),
+              expected=['amqp://:@host:5672/virtual_host'])),
         ('no_port',
          dict(url='rabbit://user:password@host/virtual_host',
-              expected=[dict(hostname='host',
-                             port=5672,
-                             userid='user',
-                             password='password',
-                             virtual_host='virtual_host')])),
+              expected=['amqp://user:password@host:5672/virtual_host'])),
         ('full_url',
          dict(url='rabbit://user:password@host:10/virtual_host',
-              expected=[dict(hostname='host',
-                             port=10,
-                             userid='user',
-                             password='password',
-                             virtual_host='virtual_host')])),
+              expected=['amqp://user:password@host:10/virtual_host'])),
         ('full_two_url',
          dict(url='rabbit://user:password@host:10,'
               'user2:password2@host2:12/virtual_host',
-              expected=[dict(hostname='host',
-                             port=10,
-                             userid='user',
-                             password='password',
-                             virtual_host='virtual_host'),
-                        dict(hostname='host2',
-                             port=12,
-                             userid='user2',
-                             password='password2',
-                             virtual_host='virtual_host')
-                        ]
+              expected=["amqp://user:password@host:10/virtual_host",
+                        "amqp://user2:password2@host2:12/virtual_host"]
               )),
-
+        ('qpid',
+         dict(url='kombu+qpid://user:password@host:10/virtual_host',
+              expected=['qpid://user:password@host:10/virtual_host'])),
+        ('rabbit',
+         dict(url='kombu+rabbit://user:password@host:10/virtual_host',
+              expected=['amqp://user:password@host:10/virtual_host'])),
     ]
 
-    def test_transport_url(self):
-        self.messaging_conf.in_memory = True
+    def setUp(self):
+        super(TestRabbitTransportURL, self).setUp()
+        self.config(heartbeat_timeout_threshold=0,
+                    group='oslo_messaging_rabbit')
+        self.messaging_conf.transport_driver = 'rabbit'
 
+    @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.ensure')
+    @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.reset')
+    def test_transport_url(self, fake_ensure_connection, fake_reset):
         transport = messaging.get_transport(self.conf, self.url)
         self.addCleanup(transport.cleanup)
         driver = transport._driver
 
-        brokers_params = driver._get_connection().brokers_params[:]
-        brokers_params = [dict((k, v) for k, v in broker.items()
-                               if k not in ['transport', 'login_method'])
-                          for broker in brokers_params]
-
-        self.assertEqual(sorted(self.expected,
-                                key=operator.itemgetter('hostname')),
-                         sorted(brokers_params,
-                                key=operator.itemgetter('hostname')))
+        # NOTE(sileht): some kombu transport can depend on library that
+        # we don't want to depend yet, because selecting the transport
+        # is experimental, only amqp is supported
+        # for example kombu+qpid depends of qpid-tools
+        # so, mock the connection.info to skip call to qpid-tools
+        with mock.patch('kombu.connection.Connection.info'):
+            urls = driver._get_connection()._url.split(";")
+        self.assertEqual(sorted(self.expected), sorted(urls))
 
 
 class TestSendReceive(test_utils.BaseTestCase):
@@ -172,13 +206,10 @@ class TestSendReceive(test_utils.BaseTestCase):
                                                          cls._failure,
                                                          cls._timeout)
 
-    def setUp(self):
-        super(TestSendReceive, self).setUp()
-        self.messaging_conf.transport_driver = 'rabbit'
-        self.messaging_conf.in_memory = True
-
     def test_send_receive(self):
-        transport = messaging.get_transport(self.conf)
+        self.config(heartbeat_timeout_threshold=0,
+                    group='oslo_messaging_rabbit')
+        transport = messaging.get_transport(self.conf, 'kombu+memory:////')
         self.addCleanup(transport.cleanup)
 
         driver = transport._driver
@@ -237,8 +268,27 @@ class TestSendReceive(test_utils.BaseTestCase):
                         raise ZeroDivisionError
                     except Exception:
                         failure = sys.exc_info()
-                    msgs[i].reply(failure=failure,
-                                  log_failure=not self.expected)
+
+                    # NOTE(noelbk) confirm that Publisher exchanges
+                    # are always declared with passive=True
+                    outer_self = self
+                    test_exchange_was_called = [False]
+                    old_init = kombu.entity.Exchange.__init__
+
+                    def new_init(self, *args, **kwargs):
+                        test_exchange_was_called[0] = True
+                        outer_self.assertTrue(kwargs['passive'])
+                        old_init(self, *args, **kwargs)
+                    kombu.entity.Exchange.__init__ = new_init
+
+                    try:
+                        msgs[i].reply(failure=failure,
+                                      log_failure=not self.expected)
+                    finally:
+                        kombu.entity.Exchange.__init__ = old_init
+
+                    self.assertTrue(test_exchange_was_called[0])
+
                 elif self.rx_id:
                     msgs[i].reply({'rx_id': i})
                 else:
@@ -267,13 +317,8 @@ TestSendReceive.generate_scenarios()
 
 class TestPollAsync(test_utils.BaseTestCase):
 
-    def setUp(self):
-        super(TestPollAsync, self).setUp()
-        self.messaging_conf.transport_driver = 'rabbit'
-        self.messaging_conf.in_memory = True
-
     def test_poll_timeout(self):
-        transport = messaging.get_transport(self.conf)
+        transport = messaging.get_transport(self.conf, 'kombu+memory:////')
         self.addCleanup(transport.cleanup)
         driver = transport._driver
         target = messaging.Target(topic='testtopic')
@@ -284,13 +329,8 @@ class TestPollAsync(test_utils.BaseTestCase):
 
 class TestRacyWaitForReply(test_utils.BaseTestCase):
 
-    def setUp(self):
-        super(TestRacyWaitForReply, self).setUp()
-        self.messaging_conf.transport_driver = 'rabbit'
-        self.messaging_conf.in_memory = True
-
     def test_send_receive(self):
-        transport = messaging.get_transport(self.conf)
+        transport = messaging.get_transport(self.conf, 'kombu+memory:////')
         self.addCleanup(transport.cleanup)
 
         driver = transport._driver
@@ -473,9 +513,6 @@ class TestRequestWireFormat(test_utils.BaseTestCase):
 
     def setUp(self):
         super(TestRequestWireFormat, self).setUp()
-        self.messaging_conf.transport_driver = 'rabbit'
-        self.messaging_conf.in_memory = True
-
         self.uuids = []
         self.orig_uuid4 = uuid.uuid4
         self.useFixture(fixtures.MonkeyPatch('uuid.uuid4', self.mock_uuid4))
@@ -488,7 +525,7 @@ class TestRequestWireFormat(test_utils.BaseTestCase):
         if hasattr(self, 'skip_msg'):
             self.skipTest(self.skip_msg)
 
-        transport = messaging.get_transport(self.conf)
+        transport = messaging.get_transport(self.conf, 'kombu+memory:////')
         self.addCleanup(transport.cleanup)
 
         driver = transport._driver
@@ -617,16 +654,11 @@ class TestReplyWireFormat(test_utils.BaseTestCase):
                                                          cls._context,
                                                          cls._target)
 
-    def setUp(self):
-        super(TestReplyWireFormat, self).setUp()
-        self.messaging_conf.transport_driver = 'rabbit'
-        self.messaging_conf.in_memory = True
-
     def test_reply_wire_format(self):
         if hasattr(self, 'skip_msg'):
             self.skipTest(self.skip_msg)
 
-        transport = messaging.get_transport(self.conf)
+        transport = messaging.get_transport(self.conf, 'kombu+memory:////')
         self.addCleanup(transport.cleanup)
 
         driver = transport._driver
@@ -672,64 +704,45 @@ class RpcKombuHATestCase(test_utils.BaseTestCase):
     def setUp(self):
         super(RpcKombuHATestCase, self).setUp()
         self.brokers = ['host1', 'host2', 'host3', 'host4', 'host5']
-        self.config(rabbit_hosts=self.brokers)
+        self.config(rabbit_hosts=self.brokers,
+                    rabbit_retry_interval=0.01,
+                    rabbit_retry_backoff=0.01,
+                    kombu_reconnect_delay=0,
+                    group="oslo_messaging_rabbit")
 
-        hostname_sets = set()
-        self.info = {'attempt': 0,
-                     'fail': False}
-
-        def _connect(myself, params):
-            # do as little work that is enough to pass connection attempt
-            myself.connection = kombu.connection.BrokerConnection(**params)
-            myself.connection_errors = myself.connection.connection_errors
-
-            hostname = params['hostname']
-            self.assertNotIn(hostname, hostname_sets)
-            hostname_sets.add(hostname)
-
-            self.info['attempt'] += 1
-            if self.info['fail']:
-                raise IOError('fake fail')
-
-        # just make sure connection instantiation does not fail with an
-        # exception
-        self.stubs.Set(rabbit_driver.Connection, '_connect', _connect)
+        self.kombu_connect = mock.Mock()
+        self.useFixture(mockpatch.Patch(
+            'kombu.connection.Connection.connect',
+            side_effect=self.kombu_connect))
+        self.useFixture(mockpatch.Patch(
+            'kombu.connection.Connection.channel'))
 
         # starting from the first broker in the list
         url = messaging.TransportURL.parse(self.conf, None)
-        self.connection = rabbit_driver.Connection(self.conf, url)
+        self.connection = rabbit_driver.Connection(self.conf, url,
+                                                   amqp.PURPOSE_SEND)
         self.addCleanup(self.connection.close)
-
-        self.info.update({'attempt': 0,
-                          'fail': True})
-        hostname_sets.clear()
-
-    def test_reconnect_order(self):
-        self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.reconnect,
-                          retry=len(self.brokers) - 1)
-        self.assertEqual(len(self.brokers), self.info['attempt'])
 
     def test_ensure_four_retry(self):
         mock_callback = mock.Mock(side_effect=IOError)
         self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.ensure, None, mock_callback,
+                          self.connection.ensure, mock_callback,
                           retry=4)
-        self.assertEqual(5, self.info['attempt'])
-        self.assertEqual(1, mock_callback.call_count)
+        self.assertEqual(5, self.kombu_connect.call_count)
+        self.assertEqual(6, mock_callback.call_count)
 
     def test_ensure_one_retry(self):
         mock_callback = mock.Mock(side_effect=IOError)
         self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.ensure, None, mock_callback,
+                          self.connection.ensure, mock_callback,
                           retry=1)
-        self.assertEqual(2, self.info['attempt'])
-        self.assertEqual(1, mock_callback.call_count)
+        self.assertEqual(2, self.kombu_connect.call_count)
+        self.assertEqual(3, mock_callback.call_count)
 
     def test_ensure_no_retry(self):
         mock_callback = mock.Mock(side_effect=IOError)
         self.assertRaises(messaging.MessageDeliveryFailure,
-                          self.connection.ensure, None, mock_callback,
+                          self.connection.ensure, mock_callback,
                           retry=0)
-        self.assertEqual(1, self.info['attempt'])
-        self.assertEqual(1, mock_callback.call_count)
+        self.assertEqual(1, self.kombu_connect.call_count)
+        self.assertEqual(2, mock_callback.call_count)

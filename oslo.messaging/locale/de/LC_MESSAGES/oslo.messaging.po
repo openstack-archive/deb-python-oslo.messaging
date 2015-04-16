@@ -5,13 +5,14 @@
 #
 # Translators:
 # Andreas Jaeger <jaegerandi@gmail.com>, 2014
+# Ettore Atalan <atalanttore@googlemail.com>, 2014
 msgid ""
 msgstr ""
 "Project-Id-Version:  oslo.messaging\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2014-09-07 06:09+0000\n"
-"PO-Revision-Date: 2014-07-10 18:39+0000\n"
-"Last-Translator: Andreas Jaeger <jaegerandi@gmail.com>\n"
+"POT-Creation-Date: 2014-12-03 06:10+0000\n"
+"PO-Revision-Date: 2014-12-01 13:11+0000\n"
+"Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language-Team: German "
 "(http://www.transifex.com/projects/p/oslomessaging/language/de/)\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
@@ -19,6 +20,10 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 1.3\n"
+
+#: oslo/messaging/_executors/impl_blocking.py:50
+msgid "Unexpected exception occurred."
+msgstr ""
 
 #: oslo/messaging/notify/_impl_routing.py:80
 #, python-format
@@ -30,32 +35,7 @@ msgstr "Es konnten keine Notifiers für %s geladen werden"
 msgid "Routing '%(event)s' notification to '%(driver)s' driver"
 msgstr "'%(event)s' Notfikation wird zum Treiber '%(driver)s' geroutet."
 
-#: oslo/messaging/openstack/common/gettextutils.py:320
-msgid "Message objects do not support addition."
-msgstr ""
-
-#: oslo/messaging/openstack/common/gettextutils.py:330
-msgid ""
-"Message objects do not support str() because they may contain non-ascii "
-"characters. Please use unicode() or translate() instead."
-msgstr ""
-
-#: oslo/messaging/openstack/common/strutils.py:92
-#, python-format
-msgid "Unrecognized value '%(val)s', acceptable values are: %(acceptable)s"
-msgstr ""
-
-#: oslo/messaging/openstack/common/strutils.py:197
-#, python-format
-msgid "Invalid unit system: \"%s\""
-msgstr ""
-
-#: oslo/messaging/openstack/common/strutils.py:206
-#, python-format
-msgid "Invalid string format: %s"
-msgstr ""
-
-#: oslo/messaging/rpc/dispatcher.py:142
+#: oslo/messaging/rpc/dispatcher.py:145
 #, python-format
 msgid "Exception during message handling: %s"
 msgstr "Exception während Messagebehandlung: %s"

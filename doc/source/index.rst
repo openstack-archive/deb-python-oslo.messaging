@@ -11,6 +11,7 @@ Contents
    :maxdepth: 1
 
    transport
+   executors
    target
    server
    rpcclient
@@ -20,6 +21,9 @@ Contents
    exceptions
    opts
    conffixture
+   AMQP1.0
+   FAQ
+   contributing
 
 Release Notes
 =============
@@ -214,7 +218,7 @@ contributions to this release.
 
 Changes since 1.3.0a9:
 
-* Expose PublishErrorsHandler in the public API
+* Expose LoggingErrorNotificationHandler in the public API
 * 1288425_: Add kombu driver library to requirements.txt
 * 1255239_: Add unit tests for the qpid driver
 * 1261631_: Add unit test for Qpid reconnect order

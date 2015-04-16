@@ -18,7 +18,7 @@ import testscenarios
 
 from oslo import messaging
 from oslo.messaging import serializer as msg_serializer
-from tests import utils as test_utils
+from oslo_messaging.tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
@@ -111,6 +111,8 @@ class TestDispatcher(test_utils.BaseTestCase):
                 elif isinstance(ex, messaging.UnsupportedVersion):
                     self.assertEqual(self.msg.get('version', '1.0'),
                                      ex.version)
+                    if ex.method:
+                        self.assertEqual(self.msg.get('method'), ex.method)
             else:
                 self.assertTrue(self.success, failure)
                 self.assertIsNone(failure)

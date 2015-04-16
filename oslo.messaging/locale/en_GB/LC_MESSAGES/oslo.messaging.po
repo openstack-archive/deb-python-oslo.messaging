@@ -9,8 +9,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version:  oslo.messaging\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2014-09-07 06:09+0000\n"
-"PO-Revision-Date: 2014-09-03 12:34+0000\n"
+"POT-Creation-Date: 2014-12-03 06:10+0000\n"
+"PO-Revision-Date: 2014-12-01 13:11+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language-Team: English (United Kingdom) "
 "(http://www.transifex.com/projects/p/oslomessaging/language/en_GB/)\n"
@@ -19,6 +19,10 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 1.3\n"
+
+#: oslo/messaging/_executors/impl_blocking.py:50
+msgid "Unexpected exception occurred."
+msgstr ""
 
 #: oslo/messaging/notify/_impl_routing.py:80
 #, python-format
@@ -30,34 +34,7 @@ msgstr "Failed to load any notifiers for %s"
 msgid "Routing '%(event)s' notification to '%(driver)s' driver"
 msgstr "Routing '%(event)s' notification to '%(driver)s' driver"
 
-#: oslo/messaging/openstack/common/gettextutils.py:320
-msgid "Message objects do not support addition."
-msgstr "Message objects do not support addition."
-
-#: oslo/messaging/openstack/common/gettextutils.py:330
-msgid ""
-"Message objects do not support str() because they may contain non-ascii "
-"characters. Please use unicode() or translate() instead."
-msgstr ""
-"Message objects do not support str() because they may contain non-ascii "
-"characters. Please use unicode() or translate() instead."
-
-#: oslo/messaging/openstack/common/strutils.py:92
-#, python-format
-msgid "Unrecognized value '%(val)s', acceptable values are: %(acceptable)s"
-msgstr "Unrecognised value '%(val)s', acceptable values are: %(acceptable)s"
-
-#: oslo/messaging/openstack/common/strutils.py:197
-#, python-format
-msgid "Invalid unit system: \"%s\""
-msgstr "Invalid unit system: \"%s\""
-
-#: oslo/messaging/openstack/common/strutils.py:206
-#, python-format
-msgid "Invalid string format: %s"
-msgstr "Invalid string format: %s"
-
-#: oslo/messaging/rpc/dispatcher.py:142
+#: oslo/messaging/rpc/dispatcher.py:145
 #, python-format
 msgid "Exception during message handling: %s"
 msgstr "Exception during message handling: %s"

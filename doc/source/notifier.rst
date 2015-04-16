@@ -2,7 +2,7 @@
 Notifier
 --------
 
-.. currentmodule:: oslo.messaging
+.. currentmodule:: oslo_messaging
 
 .. autoclass:: Notifier
    :members:
@@ -10,5 +10,5 @@ Notifier
 .. autoclass:: LoggingNotificationHandler
    :members:
 
-.. autoclass:: PublishErrorsHandler
+.. autoclass:: LoggingErrorNotificationHandler
    :members:

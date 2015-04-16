@@ -20,20 +20,20 @@ import uuid
 
 import fixtures
 import mock
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 from stevedore import dispatch
 from stevedore import extension
 import testscenarios
 import yaml
 
 from oslo import messaging
-from oslo.messaging.notify import _impl_log
-from oslo.messaging.notify import _impl_messaging
-from oslo.messaging.notify import _impl_test
-from oslo.messaging.notify import notifier as msg_notifier
-from oslo.messaging.openstack.common import jsonutils
 from oslo.messaging import serializer as msg_serializer
-from oslo.utils import timeutils
-from tests import utils as test_utils
+from oslo_messaging.notify import _impl_log
+from oslo_messaging.notify import _impl_messaging
+from oslo_messaging.notify import _impl_test
+from oslo_messaging.notify import notifier as msg_notifier
+from oslo_messaging.tests import utils as test_utils
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
@@ -147,7 +147,7 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
         self.stubs.Set(_impl_messaging, 'LOG', self.logger)
         self.stubs.Set(msg_notifier, '_LOG', self.logger)
 
-    @mock.patch('oslo.utils.timeutils.utcnow')
+    @mock.patch('oslo_utils.timeutils.utcnow')
     def test_notifier(self, mock_utcnow):
         drivers = []
         if self.v1:
@@ -223,7 +223,7 @@ class TestSerializer(test_utils.BaseTestCase):
         super(TestSerializer, self).setUp()
         self.addCleanup(_impl_test.reset)
 
-    @mock.patch('oslo.utils.timeutils.utcnow')
+    @mock.patch('oslo_utils.timeutils.utcnow')
     def test_serializer(self, mock_utcnow):
         transport = _FakeTransport(self.conf)
 
@@ -266,7 +266,7 @@ class TestSerializer(test_utils.BaseTestCase):
 
 class TestLogNotifier(test_utils.BaseTestCase):
 
-    @mock.patch('oslo.utils.timeutils.utcnow')
+    @mock.patch('oslo_utils.timeutils.utcnow')
     def test_notifier(self, mock_utcnow):
         self.config(notification_driver=['log'])
 
@@ -358,7 +358,7 @@ class TestRoutingNotifier(test_utils.BaseTestCase):
                                config_file):
             with mock.patch('stevedore.dispatch.DispatchExtensionManager',
                             return_value=self._empty_extension_manager()):
-                with mock.patch('oslo.messaging.notify.'
+                with mock.patch('oslo_messaging.notify.'
                                 '_impl_routing.LOG') as mylog:
                     self.router._load_notifiers()
                     self.assertFalse(mylog.debug.called)

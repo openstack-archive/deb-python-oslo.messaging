@@ -17,10 +17,12 @@ __all__ = ['Notifier',
            'LoggingNotificationHandler',
            'get_notification_listener',
            'NotificationResult',
-           'PublishErrorsHandler']
+           'PublishErrorsHandler',
+           'LoggingErrorNotificationHandler']
 
 from .notifier import *
 from .listener import *
 from .log_handler import *
 from .logger import *
 from .dispatcher import NotificationResult
+from oslo_messaging.notify import _impl_test
