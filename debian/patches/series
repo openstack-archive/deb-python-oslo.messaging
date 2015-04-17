@@ -1,2 +1,3 @@
 do-not-run-toplevel-test.patch
 install-missing-files.patch
+Also-install-missing-files-in-oslo-namespaced.patch

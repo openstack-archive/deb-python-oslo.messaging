@@ -1,0 +1,15 @@
+Description: Also install missing files in namespaced oslo
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2015-04-17
+
+--- oslo.messaging-1.8.1.orig/MANIFEST.in
++++ oslo.messaging-1.8.1/MANIFEST.in
+@@ -7,6 +7,7 @@ recursive-include tests *
+ recursive-include tools *
+ recursive-include doc *
+ recursive-include oslo_messaging *
++recursive-include oslo *
+ 
+ exclude .gitignore
+ exclude .gitreview
