@@ -2,6 +2,8 @@ oslo.messaging (1.8.1-1) unstable; urgency=medium
 
   * New upstream release.
   * Uploading to unstable.
+  * Fixed (build-)depends for this release.
+  * Standards-Version: bump to 3.9.6 (no change).
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 16 Apr 2015 09:21:46 +0200
 
