@@ -58,6 +58,12 @@ class TestDeprecatedRabbitDriverLoad(test_utils.BaseTestCase):
 
 class TestHeartbeat(test_utils.BaseTestCase):
 
+    def setUp(self):
+        super(TestHeartbeat, self).setUp(
+            conf=cfg.ConfigOpts())
+        self.config(heartbeat_timeout_threshold=60,
+                    group='oslo_messaging_rabbit')
+
     @mock.patch('oslo_messaging._drivers.impl_rabbit.LOG')
     @mock.patch('kombu.connection.Connection.heartbeat_check')
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.'
@@ -164,7 +170,7 @@ class TestRabbitDriverLoadSSL(test_utils.BaseTestCase):
         transport._driver._get_connection()
         connection_klass.assert_called_once_with(
             'memory:///', ssl=self.expected, login_method='AMQPLAIN',
-            heartbeat=60, failover_strategy="shuffle")
+            heartbeat=0, failover_strategy="shuffle")
 
 
 class TestRabbitIterconsume(test_utils.BaseTestCase):
@@ -234,6 +240,13 @@ class TestRabbitTransportURL(test_utils.BaseTestCase):
               expected=["amqp://user:password@host:10/virtual_host",
                         "amqp://user2:password2@host2:12/virtual_host"]
               )),
+        ('rabbit_ipv6',
+         dict(url='rabbit://u:p@[fd00:beef:dead:55::133]:10/vhost',
+              skip_py26='python 2.6 has broken urlparse for ipv6',
+              expected=['amqp://u:p@[fd00:beef:dead:55::133]:10/vhost'])),
+        ('rabbit_ipv4',
+         dict(url='rabbit://user:password@10.20.30.40:10/vhost',
+              expected=['amqp://user:password@10.20.30.40:10/vhost'])),
     ]
 
     def setUp(self):
@@ -245,6 +258,9 @@ class TestRabbitTransportURL(test_utils.BaseTestCase):
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.ensure')
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.reset')
     def test_transport_url(self, fake_reset, fake_ensure):
+        if hasattr(self, 'skip_py26') and sys.version_info < (2, 7):
+            self.skipTest(self.skip_py26)
+
         transport = oslo_messaging.get_transport(self.conf, self.url)
         self.addCleanup(transport.cleanup)
         driver = transport._driver
