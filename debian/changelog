@@ -1,6 +1,7 @@
 oslo.messaging (1.8.2-1) UNRELEASED; urgency=medium
 
   * New upstream release.
+  * Add myself to Uploaders.
 
  -- James Page <james.page@ubuntu.com>  Thu, 21 May 2015 13:59:43 -0700
 
