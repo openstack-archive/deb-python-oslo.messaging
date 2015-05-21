@@ -1,3 +1,9 @@
+oslo.messaging (1.8.2-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 21 May 2015 13:59:43 -0700
+
 oslo.messaging (1.8.1-1) unstable; urgency=medium
 
   * New upstream release.
