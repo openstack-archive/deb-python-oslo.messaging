@@ -6,6 +6,7 @@ Uploaders: Thomas Goirand <zigo@debian.org>,
            James Page <james.page@ubuntu.com>
 Build-Depends: debhelper (>= 9),
                dh-python,
+               dh-systemd (>= 1.5),
                openstack-pkg-tools,
                python-all,
                python-pbr,
@@ -73,3 +74,17 @@ Description: oslo messaging library
  different messaging transports.
  .
  Oslo is a set of libraries developed for OpenStack.
+
+Package: oslo-messaging-zmq-receiver
+Architecture: all
+Depends:
+ adduser,
+ python-oslo.messaging (= ${binary:Version}),
+ python-zmq,
+ ${misc:Depends}
+Description: Oslo Messaging ZeroMQ receiver daemon
+ The Oslo Messaging API supports RPC and notifications over a number of
+ different messaging transports.
+ .
+ This package provides the ZeroMQ receiver which processes incoming
+ messages on all servers participating in a ZeroMQ messaging cluster.

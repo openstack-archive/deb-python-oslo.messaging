@@ -1,0 +1,16 @@
+[Unit]
+Description=Oslo Messaging ZeroMQ Receiver
+After=network.target
+
+[Service]
+Type=simple
+Umask=007
+User=oslo
+Group=oslo
+ExecStartPre=mkdir -p /var/run/openstack
+ExecStartPre=chown -R oslo:oslo /var/run/openstack
+ExecStart=/usr/bin/oslo-messaging-zmq-receiver --config-file=/etc/oslo/oslo-messaging.conf
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target

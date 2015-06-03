@@ -4,6 +4,7 @@ oslo.messaging (1.13.0-1) UNRELEASED; urgency=medium
     - d/control: Align version requirements and dependencies with upstream.
   * Add myself to Uploaders.
   * Ensure that unit test failures result in a package build failure.
+  * Add new binary package for oslo-messaging-zmq-receiver.
 
  -- James Page <james.page@ubuntu.com>  Thu, 21 May 2015 13:59:43 -0700
 

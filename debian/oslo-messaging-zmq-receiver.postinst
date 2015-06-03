@@ -1,0 +1,15 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ]; then
+    if ! getent group oslo > /dev/null 2>&1; then
+        addgroup --system oslo > /dev/null
+    fi
+    if ! getent passwd oslo > /dev/null 2>&1; then
+        adduser --system --home /var/lib/oslo --ingroup oslo \
+            --no-create-home --shell /bin/false oslo
+    fi
+fi
+
+#DEBHELPER#
