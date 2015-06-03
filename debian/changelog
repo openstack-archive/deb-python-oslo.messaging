@@ -6,6 +6,10 @@ python-oslo.messaging (1.13.0-1) UNRELEASED; urgency=medium
   * Ensure that unit test failures result in a package build failure.
   * Add new binary package for oslo-messaging-zmq-receiver.
   * Rename source package to python-oslo.messaging.
+  * Re-align with Ubuntu:
+    - d/control: Add Breaks/Replaces and transitional package for
+      python-oslo-messaging in Ubuntu.
+  * d/*: wrap-and-sort.
 
  -- James Page <james.page@ubuntu.com>  Thu, 21 May 2015 13:59:43 -0700
 

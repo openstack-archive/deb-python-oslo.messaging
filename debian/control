@@ -3,7 +3,7 @@ Section: python
 Priority: optional
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: Thomas Goirand <zigo@debian.org>,
-           James Page <james.page@ubuntu.com>
+           James Page <james.page@ubuntu.com>,
 Build-Depends: debhelper (>= 9),
                dh-python,
                dh-systemd (>= 1.5),
@@ -48,14 +48,14 @@ Homepage: https://github.com/openstack/oslo.messaging
 
 Package: python-oslo.messaging
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
+Pre-Depends: dpkg (>= 1.15.6~),
 Depends: python-aioeventlet (>= 0.4),
          python-amqp (>= 1.4.0),
          python-concurrent.futures,
-         python-oslo.context (>= 0.2.0),
          python-eventlet (>= 0.17.3),
          python-kombu (>= 3.0.7),
          python-oslo.config (>= 1:1.11.0),
+         python-oslo.context (>= 0.2.0),
          python-oslo.i18n (>= 1.5.0),
          python-oslo.middleware (>= 1.2.0),
          python-oslo.serialization (>= 1.4.0),
@@ -69,6 +69,8 @@ Depends: python-aioeventlet (>= 0.4),
          ${misc:Depends},
          ${python:Depends},
          ${sphinxdoc:Depends},
+Breaks: python-oslo-messaging (<< 1.13.0-1~),
+Replaces: python-oslo-messaging (<< 1.13.0-1~),
 Description: oslo messaging library
  The oslo.messaging API supports RPC and notifications over a number of
  different messaging transports.
@@ -77,14 +79,21 @@ Description: oslo messaging library
 
 Package: oslo-messaging-zmq-receiver
 Architecture: all
-Depends:
- adduser,
- python-oslo.messaging (= ${binary:Version}),
- python-zmq,
- ${misc:Depends}
+Depends: adduser,
+         python-oslo.messaging (= ${binary:Version}),
+         python-zmq,
+         ${misc:Depends},
 Description: Oslo Messaging ZeroMQ receiver daemon
  The Oslo Messaging API supports RPC and notifications over a number of
  different messaging transports.
  .
  This package provides the ZeroMQ receiver which processes incoming
  messages on all servers participating in a ZeroMQ messaging cluster.
+
+Package: python-oslo-messaging
+Section: oldlibs
+Architecture: all
+Depends: python-oslo.messaging,
+         ${misc:Depends},
+Description: transitional dummy package for python-oslo-messaging
+ This transtional package is safe to remove.
