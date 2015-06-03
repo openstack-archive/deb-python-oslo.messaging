@@ -71,8 +71,12 @@ class AMQPIncomingMessage(base.IncomingMessage):
             return
         with self.listener.driver._get_connection(
                 rpc_amqp.PURPOSE_SEND) as conn:
-            self._send_reply(conn, reply, failure, log_failure=log_failure)
-            self._send_reply(conn, ending=True)
+            if self.listener.driver.send_single_reply:
+                self._send_reply(conn, reply, failure, log_failure=log_failure,
+                                 ending=True)
+            else:
+                self._send_reply(conn, reply, failure, log_failure=log_failure)
+                self._send_reply(conn, ending=True)
 
     def acknowledge(self):
         self.listener.msg_id_cache.add(self.unique_id)
@@ -119,7 +123,7 @@ class AMQPListener(base.Listener):
             if self.incoming:
                 return self.incoming.pop(0)
             try:
-                self.conn.consume(limit=1, timeout=timeout)
+                self.conn.consume(timeout=timeout)
             except rpc_common.Timeout:
                 return None
 
@@ -194,7 +198,7 @@ class ReplyWaiter(object):
     def poll(self):
         while not self._thread_exit_event.is_set():
             try:
-                self.conn.consume(limit=1)
+                self.conn.consume()
             except Exception:
                 LOG.exception("Failed to process incoming message, "
                               "retrying...")
@@ -216,23 +220,24 @@ class ReplyWaiter(object):
             _('Timed out waiting for a reply to message ID %s.') % msg_id)
 
     def _process_reply(self, data):
-        result = None
-        ending = False
         self.msg_id_cache.check_duplicate_message(data)
         if data['failure']:
             failure = data['failure']
             result = rpc_common.deserialize_remote_exception(
                 failure, self.allowed_remote_exmods)
-        elif data.get('ending', False):
-            ending = True
         else:
-            result = data['result']
+            result = data.get('result', None)
+
+        ending = data.get('ending', False)
         return result, ending
 
     def wait(self, msg_id, timeout):
         # NOTE(sileht): for each msg_id we receive two amqp message
         # first one with the payload, a second one to ensure the other
         # have finish to send the payload
+        # NOTE(viktors): We are going to remove this behavior in the N
+        # release, but we need to keep backward compatibility, so we should
+        # support both cases for now.
         timer = rpc_common.DecayingTimer(duration=timeout)
         timer.start()
         final_reply = None
@@ -245,7 +250,10 @@ class ReplyWaiter(object):
                 self._raise_timeout_exception(msg_id)
 
             reply, ending = self._process_reply(message)
-            if not ending:
+            if reply is not None:
+                # NOTE(viktors): This can be either first _send_reply() with an
+                # empty `result` field or a second _send_reply() with
+                # ending=True and no `result` field.
                 final_reply = reply
         return final_reply
 
@@ -253,7 +261,8 @@ class ReplyWaiter(object):
 class AMQPDriverBase(base.BaseDriver):
 
     def __init__(self, conf, url, connection_pool,
-                 default_exchange=None, allowed_remote_exmods=None):
+                 default_exchange=None, allowed_remote_exmods=None,
+                 send_single_reply=False):
         super(AMQPDriverBase, self).__init__(conf, url, default_exchange,
                                              allowed_remote_exmods)
 
@@ -265,6 +274,8 @@ class AMQPDriverBase(base.BaseDriver):
         self._reply_q = None
         self._reply_q_conn = None
         self._waiter = None
+
+        self.send_single_reply = send_single_reply
 
     def _get_exchange(self, target):
         return target.exchange or self._default_exchange

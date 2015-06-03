@@ -11,10 +11,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import oslo_messaging
+import time
+import uuid
 
+import concurrent.futures
 from testtools import matchers
 
+import oslo_messaging
 from oslo_messaging.tests.functional import utils
 
 
@@ -34,8 +37,6 @@ class CallTestCase(utils.SkipIfNoTransportURL):
             self.assertEqual(0, group.servers[i].endpoint.ival)
 
     def test_server_in_group(self):
-        if self.url.startswith("amqp:"):
-            self.skipTest("QPID-6307")
         group = self.useFixture(utils.RpcServerGroupFixture(self.url))
 
         client = group.client()
@@ -49,22 +50,17 @@ class CallTestCase(utils.SkipIfNoTransportURL):
         self.assertThat(actual, utils.IsValidDistributionOf(data))
 
     def test_different_exchanges(self):
-        if self.url.startswith("amqp:"):
-            self.skipTest("QPID-6307")
-        t = self.useFixture(utils.TransportFixture(self.url))
         # If the different exchanges are not honoured, then the
         # teardown may hang unless we broadcast all control messages
         # to each server
         group1 = self.useFixture(
-            utils.RpcServerGroupFixture(self.url, transport=t,
+            utils.RpcServerGroupFixture(self.url,
                                         use_fanout_ctrl=True))
         group2 = self.useFixture(
             utils.RpcServerGroupFixture(self.url, exchange="a",
-                                        transport=t,
                                         use_fanout_ctrl=True))
         group3 = self.useFixture(
             utils.RpcServerGroupFixture(self.url, exchange="b",
-                                        transport=t,
                                         use_fanout_ctrl=True))
 
         client1 = group1.client(1)
@@ -110,6 +106,27 @@ class CallTestCase(utils.SkipIfNoTransportURL):
         f = lambda: client.subtract(increment=3)
         self.assertThat(f, matchers.raises(ValueError))
 
+    def test_timeout_with_concurrently_queues(self):
+        transport = self.useFixture(utils.TransportFixture(self.url))
+        target = oslo_messaging.Target(topic="topic_" + str(uuid.uuid4()),
+                                       server="server_" + str(uuid.uuid4()))
+        server = self.useFixture(
+            utils.RpcServerFixture(self.url, target, executor="threading"))
+        client = utils.ClientStub(transport.transport, target,
+                                  cast=False, timeout=5)
+
+        def short_periodical_tasks():
+            for i in range(10):
+                client.add(increment=1)
+                time.sleep(1)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            future = executor.submit(client.long_running_task, seconds=10)
+            executor.submit(short_periodical_tasks)
+            self.assertRaises(oslo_messaging.MessagingTimeout, future.result)
+
+        self.assertEqual(10, server.endpoint.ival)
+
 
 class CastTestCase(utils.SkipIfNoTransportURL):
     # Note: casts return immediately, so these tests utilise a special
@@ -123,8 +140,9 @@ class CastTestCase(utils.SkipIfNoTransportURL):
         client.append(text='stack')
         client.add(increment=2)
         client.add(increment=10)
-        group.sync()
+        client.sync()
 
+        group.sync(1)
         self.assertEqual('openstack', group.servers[1].endpoint.sval)
         self.assertEqual(12, group.servers[1].endpoint.ival)
         for i in [0, 2]:
@@ -132,11 +150,16 @@ class CastTestCase(utils.SkipIfNoTransportURL):
             self.assertEqual(0, group.servers[i].endpoint.ival)
 
     def test_server_in_group(self):
+        if self.url.startswith("amqp:"):
+            self.skipTest("QPID-6307")
         group = self.useFixture(utils.RpcServerGroupFixture(self.url))
         client = group.client(cast=True)
         for i in range(20):
             client.add(increment=1)
-        group.sync()
+        for i in range(len(group.servers)):
+            # expect each server to get a sync
+            client.sync()
+        group.sync(server="all")
         total = 0
         for s in group.servers:
             ival = s.endpoint.ival
@@ -152,6 +175,7 @@ class CastTestCase(utils.SkipIfNoTransportURL):
         client.append(text='stack')
         client.add(increment=2)
         client.add(increment=10)
+        client.sync()
         group.sync(server='all')
         for s in group.servers:
             self.assertEqual('openstack', s.endpoint.sval)
@@ -163,11 +187,8 @@ class NotifyTestCase(utils.SkipIfNoTransportURL):
     # to be run in parallel
 
     def test_simple(self):
-        transport = self.useFixture(utils.TransportFixture(self.url))
         listener = self.useFixture(
-            utils.NotificationFixture(transport.transport,
-                                      ['test_simple']))
-        transport.wait()
+            utils.NotificationFixture(self.url, ['test_simple']))
         notifier = listener.notifier('abc')
 
         notifier.info({}, 'test', 'Hello World!')
@@ -178,11 +199,8 @@ class NotifyTestCase(utils.SkipIfNoTransportURL):
         self.assertEqual('abc', event[3])
 
     def test_multiple_topics(self):
-        transport = self.useFixture(utils.TransportFixture(self.url))
         listener = self.useFixture(
-            utils.NotificationFixture(transport.transport,
-                                      ['a', 'b']))
-        transport.wait()
+            utils.NotificationFixture(self.url, ['a', 'b']))
         a = listener.notifier('pub-a', topic='a')
         b = listener.notifier('pub-b', topic='b')
 
@@ -206,18 +224,17 @@ class NotifyTestCase(utils.SkipIfNoTransportURL):
             self.assertEqual(expected[2], actual[2])
 
     def test_multiple_servers(self):
-        transport = self.useFixture(utils.TransportFixture(self.url))
+        if self.url.startswith("amqp:"):
+            self.skipTest("QPID-6307")
         listener_a = self.useFixture(
-            utils.NotificationFixture(transport.transport,
-                                      ['test-topic']))
+            utils.NotificationFixture(self.url, ['test-topic']))
+
         listener_b = self.useFixture(
-            utils.NotificationFixture(transport.transport,
-                                      ['test-topic']))
-        transport.wait()
+            utils.NotificationFixture(self.url, ['test-topic']))
+
         n = listener_a.notifier('pub')
 
         events_out = [('test-%s' % c, 'payload-%s' % c) for c in 'abcdefgh']
-
         for event_type, payload in events_out:
             n.info({}, event_type, payload)
 
@@ -229,14 +246,10 @@ class NotifyTestCase(utils.SkipIfNoTransportURL):
             self.assertThat(len(stream), matchers.GreaterThan(0))
 
     def test_independent_topics(self):
-        transport = self.useFixture(utils.TransportFixture(self.url))
         listener_a = self.useFixture(
-            utils.NotificationFixture(transport.transport,
-                                      ['1']))
+            utils.NotificationFixture(self.url, ['1']))
         listener_b = self.useFixture(
-            utils.NotificationFixture(transport.transport,
-                                      ['2']))
-        transport.wait()
+            utils.NotificationFixture(self.url, ['2']))
 
         a = listener_a.notifier('pub-1', topic='1')
         b = listener_b.notifier('pub-2', topic='2')
@@ -264,10 +277,8 @@ class NotifyTestCase(utils.SkipIfNoTransportURL):
             self.assertEqual('pub-2', actual[3])
 
     def test_all_categories(self):
-        transport = self.useFixture(utils.TransportFixture(self.url))
         listener = self.useFixture(utils.NotificationFixture(
-            transport.transport, ['test_all_categories']))
-        transport.wait()
+            self.url, ['test_all_categories']))
         n = listener.notifier('abc')
 
         cats = ['debug', 'audit', 'info', 'warn', 'error', 'critical']

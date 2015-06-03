@@ -12,12 +12,15 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-__all__ = ['Serializer', 'NoOpSerializer']
+__all__ = ['Serializer', 'NoOpSerializer', 'JsonPayloadSerializer',
+           'RequestContextSerializer']
 
 """Provides the definition of a message serialization handler"""
 
 import abc
 
+from oslo_context import context as common_context
+from oslo_serialization import jsonutils
 import six
 
 
@@ -60,6 +63,28 @@ class Serializer(object):
         """
 
 
+class RequestContextSerializer(Serializer):
+
+    def __init__(self, base):
+        self._base = base
+
+    def serialize_entity(self, context, entity):
+        if not self._base:
+            return entity
+        return self._base.serialize_entity(context, entity)
+
+    def deserialize_entity(self, context, entity):
+        if not self._base:
+            return entity
+        return self._base.deserialize_entity(context, entity)
+
+    def serialize_context(self, context):
+        return context.to_dict()
+
+    def deserialize_context(self, context):
+        return common_context.RequestContext.from_dict(context)
+
+
 class NoOpSerializer(Serializer):
     """A serializer that does nothing."""
 
@@ -74,3 +99,9 @@ class NoOpSerializer(Serializer):
 
     def deserialize_context(self, ctxt):
         return ctxt
+
+
+class JsonPayloadSerializer(NoOpSerializer):
+    @staticmethod
+    def serialize_entity(context, entity):
+        return jsonutils.to_primitive(entity, convert_instances=True)

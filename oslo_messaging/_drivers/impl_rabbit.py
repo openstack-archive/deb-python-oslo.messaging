@@ -12,9 +12,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import collections
 import contextlib
 import functools
-import itertools
 import logging
 import os
 import socket
@@ -34,12 +34,14 @@ from six.moves.urllib import parse
 
 from oslo_messaging._drivers import amqp as rpc_amqp
 from oslo_messaging._drivers import amqpdriver
+from oslo_messaging._drivers import base
 from oslo_messaging._drivers import common as rpc_common
 from oslo_messaging._i18n import _
 from oslo_messaging._i18n import _LE
 from oslo_messaging._i18n import _LI
 from oslo_messaging._i18n import _LW
 from oslo_messaging import exceptions
+from oslo_messaging.rpc import client as rpc_client
 
 
 rabbit_opts = [
@@ -126,8 +128,7 @@ rabbit_opts = [
                default=0,
                help="Number of seconds after which the Rabbit broker is "
                "considered down if heartbeat's keep-alive fails "
-               "(0 disables the heartbeat, >0 enables it. Enabling heartbeats "
-               "requires kombu>=3.0.7 and amqp>=1.4.0). EXPERIMENTAL"),
+               "(0 disable the heartbeat). EXPERIMENTAL"),
     cfg.IntOpt('heartbeat_rate',
                default=2,
                help='How often times during the heartbeat_timeout_threshold '
@@ -171,305 +172,192 @@ class RabbitMessage(dict):
         self._raw_message.requeue()
 
 
-class ConsumerBase(object):
-    """Consumer base class."""
+class Consumer(object):
+    """Consumer class."""
 
-    def __init__(self, channel, callback, tag, **kwargs):
-        """Declare a queue on an amqp channel.
-
-        'channel' is the amqp channel to use
-        'callback' is the callback to call when messages are received
-        'tag' is a unique ID for the consumer on the channel
-
-        queue name, exchange name, and other kombu options are
-        passed in here as a dictionary.
+    def __init__(self, conf, exchange_name, queue_name, routing_key, type,
+                 durable, auto_delete, callback, nowait=True):
+        """Init the Publisher class with the exchange_name, routing_key,
+        type, durable auto_delete
         """
+        self.queue_name = queue_name
+        self.exchange_name = exchange_name
+        self.routing_key = routing_key
+        self.auto_delete = auto_delete
+        self.durable = durable
         self.callback = callback
-        self.tag = six.text_type(tag)
-        self.kwargs = kwargs
-        self.queue = None
-        self.reconnect(channel)
+        self.type = type
+        self.nowait = nowait
+        self.queue_arguments = _get_queue_arguments(conf)
 
-    def reconnect(self, channel):
-        """Re-declare the queue after a rabbit reconnect."""
-        self.channel = channel
-        self.kwargs['channel'] = channel
-        self.queue = kombu.entity.Queue(**self.kwargs)
+        self.queue = None
+        self.exchange = kombu.entity.Exchange(
+            name=exchange_name,
+            type=type,
+            durable=self.durable,
+            auto_delete=self.auto_delete)
+
+    def declare(self, conn):
+        """Re-declare the queue after a rabbit (re)connect."""
+        self.queue = kombu.entity.Queue(
+            name=self.queue_name,
+            channel=conn.channel,
+            exchange=self.exchange,
+            durable=self.durable,
+            auto_delete=self.auto_delete,
+            routing_key=self.routing_key,
+            queue_arguments=self.queue_arguments)
+
         try:
             self.queue.declare()
-        except Exception as e:
-            # NOTE: This exception may be triggered by a race condition.
-            # Simply retrying will solve the error most of the time and
-            # should work well enough as a workaround until the race condition
-            # itself can be fixed.
-            # TODO(jrosenboom): In order to be able to match the Exception
-            # more specifically, we have to refactor ConsumerBase to use
-            # 'channel_errors' of the kombu connection object that
-            # has created the channel.
+        except conn.connection.channel_errors as exc:
+            # NOTE(jrosenboom): This exception may be triggered by a race
+            # condition. Simply retrying will solve the error most of the time
+            # and should work well enough as a workaround until the race
+            # condition itself can be fixed.
             # See https://bugs.launchpad.net/neutron/+bug/1318721 for details.
-            LOG.error(_("Declaring queue failed with (%s), retrying"), e)
-            self.queue.declare()
+            if exc.code == 404:
+                self.queue.declare()
+            else:
+                raise
 
-    def _callback_handler(self, message, callback):
+    def consume(self, tag):
+        """Actually declare the consumer on the amqp channel.  This will
+        start the flow of messages from the queue.  Using the
+        Connection.consume() will process the messages,
+        calling the appropriate callback.
+        """
+
+        self.queue.consume(callback=self._callback,
+                           consumer_tag=six.text_type(tag),
+                           nowait=self.nowait)
+
+    def cancel(self, tag):
+        self.queue.cancel(six.text_type(tag))
+
+    def _callback(self, message):
         """Call callback with deserialized message.
 
         Messages that are processed and ack'ed.
         """
 
+        m2p = getattr(self.queue.channel, 'message_to_python', None)
+        if m2p:
+            message = m2p(message)
+
         try:
-            callback(RabbitMessage(message))
+            self.callback(RabbitMessage(message))
         except Exception:
             LOG.exception(_("Failed to process message"
                             " ... skipping it."))
             message.ack()
 
-    def consume(self, *args, **kwargs):
-        """Actually declare the consumer on the amqp channel.  This will
-        start the flow of messages from the queue.  Using the
-        Connection.iterconsume() iterator will process the messages,
-        calling the appropriate callback.
 
-        If a callback is specified in kwargs, use that.  Otherwise,
-        use the callback passed during __init__()
+class DummyConnectionLock(object):
+    def acquire(self):
+        pass
 
-        If kwargs['nowait'] is True, then this call will block until
-        a message is read.
+    def release(self):
+        pass
 
-        """
+    def heartbeat_acquire(self):
+        pass
 
-        options = {'consumer_tag': self.tag}
-        options['nowait'] = kwargs.get('nowait', False)
-        callback = kwargs.get('callback', self.callback)
-        if not callback:
-            raise ValueError("No callback defined")
+    def __enter__(self):
+        self.acquire()
 
-        def _callback(message):
-            m2p = getattr(self.channel, 'message_to_python', None)
-            if m2p:
-                message = m2p(message)
-            self._callback_handler(message, callback)
+    def __exit__(self, type, value, traceback):
+        self.release()
 
-        self.queue.consume(*args, callback=_callback, **options)
 
-    def cancel(self):
-        """Cancel the consuming from the queue, if it has started."""
+class ConnectionLock(DummyConnectionLock):
+    """Lock object to protect access the the kombu connection
+
+    This is a lock object to protect access the the kombu connection
+    object between the heartbeat thread and the driver thread.
+
+    They are two way to acquire this lock:
+        * lock.acquire()
+        * lock.heartbeat_acquire()
+
+    In both case lock.release(), release the lock.
+
+    The goal is that the heartbeat thread always have the priority
+    for acquiring the lock. This ensures we have no heartbeat
+    starvation when the driver sends a lot of messages.
+
+    So when lock.heartbeat_acquire() is called next time the lock
+    is released(), the caller unconditionnaly acquires
+    the lock, even someone else have asked for the lock before it.
+    """
+
+    def __init__(self):
+        self._workers_waiting = 0
+        self._heartbeat_waiting = False
+        self._lock_acquired = None
+        self._monitor = threading.Lock()
+        self._workers_locks = threading.Condition(self._monitor)
+        self._heartbeat_lock = threading.Condition(self._monitor)
+        self._get_thread_id = self._fetch_current_thread_functor()
+
+    def acquire(self):
+        with self._monitor:
+            while self._lock_acquired:
+                self._workers_waiting += 1
+                self._workers_locks.wait()
+                self._workers_waiting -= 1
+            self._lock_acquired = self._get_thread_id()
+
+    def heartbeat_acquire(self):
+        # NOTE(sileht): must be called only one time
+        with self._monitor:
+            while self._lock_acquired is not None:
+                self._heartbeat_waiting = True
+                self._heartbeat_lock.wait()
+                self._heartbeat_waiting = False
+            self._lock_acquired = self._get_thread_id()
+
+    def release(self):
+        with self._monitor:
+            if self._lock_acquired is None:
+                raise RuntimeError("We can't release a not acquired lock")
+            thread_id = self._get_thread_id()
+            if self._lock_acquired != thread_id:
+                raise RuntimeError("We can't release lock acquired by another "
+                                   "thread/greenthread; %s vs %s" %
+                                   (self._lock_acquired, thread_id))
+            self._lock_acquired = None
+            if self._heartbeat_waiting:
+                self._heartbeat_lock.notify()
+            elif self._workers_waiting > 0:
+                self._workers_locks.notify()
+
+    @contextlib.contextmanager
+    def for_heartbeat(self):
+        self.heartbeat_acquire()
         try:
-            self.queue.cancel(self.tag)
-        except KeyError as e:
-            # NOTE(comstud): Kludge to get around a amqplib bug
-            if six.text_type(e) != "u'%s'" % self.tag:
-                raise
-        self.queue = None
+            yield
+        finally:
+            self.release()
 
-
-class DirectConsumer(ConsumerBase):
-    """Queue/consumer class for 'direct'."""
-
-    def __init__(self, conf, channel, msg_id, callback, tag, **kwargs):
-        """Init a 'direct' queue.
-
-        'channel' is the amqp channel to use
-        'msg_id' is the msg_id to listen on
-        'callback' is the callback to call when messages are received
-        'tag' is a unique ID for the consumer on the channel
-
-        Other kombu options may be passed
-        """
-        # Default options
-        options = {'durable': False,
-                   'queue_arguments': _get_queue_arguments(conf),
-                   'auto_delete': True,
-                   'exclusive': False}
-        options.update(kwargs)
-        exchange = kombu.entity.Exchange(name=msg_id,
-                                         type='direct',
-                                         durable=options['durable'],
-                                         auto_delete=options['auto_delete'])
-        super(DirectConsumer, self).__init__(channel,
-                                             callback,
-                                             tag,
-                                             name=msg_id,
-                                             exchange=exchange,
-                                             routing_key=msg_id,
-                                             **options)
-
-
-class TopicConsumer(ConsumerBase):
-    """Consumer class for 'topic'."""
-
-    def __init__(self, conf, channel, topic, callback, tag, exchange_name,
-                 name=None, **kwargs):
-        """Init a 'topic' queue.
-
-        :param channel: the amqp channel to use
-        :param topic: the topic to listen on
-        :paramtype topic: str
-        :param callback: the callback to call when messages are received
-        :param tag: a unique ID for the consumer on the channel
-        :param exchange_name: the exchange name to use
-        :param name: optional queue name, defaults to topic
-        :paramtype name: str
-
-        Other kombu options may be passed as keyword arguments
-        """
-        # Default options
-        options = {'durable': conf.amqp_durable_queues,
-                   'queue_arguments': _get_queue_arguments(conf),
-                   'auto_delete': conf.amqp_auto_delete,
-                   'exclusive': False}
-        options.update(kwargs)
-        exchange = kombu.entity.Exchange(name=exchange_name,
-                                         type='topic',
-                                         durable=options['durable'],
-                                         auto_delete=options['auto_delete'])
-        super(TopicConsumer, self).__init__(channel,
-                                            callback,
-                                            tag,
-                                            name=name or topic,
-                                            exchange=exchange,
-                                            routing_key=topic,
-                                            **options)
-
-
-class FanoutConsumer(ConsumerBase):
-    """Consumer class for 'fanout'."""
-
-    def __init__(self, conf, channel, topic, callback, tag, **kwargs):
-        """Init a 'fanout' queue.
-
-        'channel' is the amqp channel to use
-        'topic' is the topic to listen on
-        'callback' is the callback to call when messages are received
-        'tag' is a unique ID for the consumer on the channel
-
-        Other kombu options may be passed
-        """
-        unique = uuid.uuid4().hex
-        exchange_name = '%s_fanout' % topic
-        queue_name = '%s_fanout_%s' % (topic, unique)
-
-        # Default options
-        options = {'durable': False,
-                   'queue_arguments': _get_queue_arguments(conf),
-                   'auto_delete': True,
-                   'exclusive': False}
-        options.update(kwargs)
-        exchange = kombu.entity.Exchange(name=exchange_name, type='fanout',
-                                         durable=options['durable'],
-                                         auto_delete=options['auto_delete'])
-        super(FanoutConsumer, self).__init__(channel, callback, tag,
-                                             name=queue_name,
-                                             exchange=exchange,
-                                             routing_key=topic,
-                                             **options)
-
-
-class Publisher(object):
-    """Base Publisher class."""
-
-    def __init__(self, channel, exchange_name, routing_key, **kwargs):
-        """Init the Publisher class with the exchange_name, routing_key,
-        and other options
-        """
-        self.exchange_name = exchange_name
-        self.routing_key = routing_key
-        self.kwargs = kwargs
-        self.reconnect(channel)
-
-    def reconnect(self, channel):
-        """Re-establish the Producer after a rabbit reconnection."""
-        self.exchange = kombu.entity.Exchange(name=self.exchange_name,
-                                              **self.kwargs)
-        self.producer = kombu.messaging.Producer(exchange=self.exchange,
-                                                 channel=channel,
-                                                 routing_key=self.routing_key)
-
-    def send(self, msg, timeout=None):
-        """Send a message."""
-        if timeout:
-            #
-            # AMQP TTL is in milliseconds when set in the header.
-            #
-            self.producer.publish(msg, headers={'ttl': (timeout * 1000)})
+    @staticmethod
+    def _fetch_current_thread_functor():
+        # Until https://github.com/eventlet/eventlet/issues/172 is resolved
+        # or addressed we have to use complicated workaround to get a object
+        # that will not be recycled; the usage of threading.current_thread()
+        # doesn't appear to currently be monkey patched and therefore isn't
+        # reliable to use (and breaks badly when used as all threads share
+        # the same current_thread() object)...
+        try:
+            import eventlet
+            from eventlet import patcher
+            green_threaded = patcher.is_monkey_patched('thread')
+        except ImportError:
+            green_threaded = False
+        if green_threaded:
+            return lambda: eventlet.getcurrent()
         else:
-            self.producer.publish(msg)
-
-
-class DirectPublisher(Publisher):
-    """Publisher class for 'direct'."""
-    def __init__(self, conf, channel, topic, **kwargs):
-        """Init a 'direct' publisher.
-
-        Kombu options may be passed as keyword args to override defaults
-        """
-
-        options = {'durable': False,
-                   'auto_delete': True,
-                   'exclusive': False,
-                   'passive': True}
-        options.update(kwargs)
-        super(DirectPublisher, self).__init__(channel, topic, topic,
-                                              type='direct', **options)
-
-
-class TopicPublisher(Publisher):
-    """Publisher class for 'topic'."""
-    def __init__(self, conf, channel, exchange_name, topic, **kwargs):
-        """Init a 'topic' publisher.
-
-        Kombu options may be passed as keyword args to override defaults
-        """
-        options = {'durable': conf.amqp_durable_queues,
-                   'auto_delete': conf.amqp_auto_delete,
-                   'exclusive': False}
-
-        options.update(kwargs)
-        super(TopicPublisher, self).__init__(channel,
-                                             exchange_name,
-                                             topic,
-                                             type='topic',
-                                             **options)
-
-
-class FanoutPublisher(Publisher):
-    """Publisher class for 'fanout'."""
-    def __init__(self, conf, channel, topic, **kwargs):
-        """Init a 'fanout' publisher.
-
-        Kombu options may be passed as keyword args to override defaults
-        """
-        options = {'durable': False,
-                   'auto_delete': True,
-                   'exclusive': False}
-        options.update(kwargs)
-        super(FanoutPublisher, self).__init__(channel, '%s_fanout' % topic,
-                                              None, type='fanout', **options)
-
-
-class NotifyPublisher(TopicPublisher):
-    """Publisher class for 'notify'."""
-
-    def __init__(self, conf, channel, exchange_name, topic, **kwargs):
-        self.durable = kwargs.pop('durable', conf.amqp_durable_queues)
-        self.auto_delete = kwargs.pop('auto_delete', conf.amqp_auto_delete)
-        self.queue_arguments = _get_queue_arguments(conf)
-        super(NotifyPublisher, self).__init__(conf, channel, exchange_name,
-                                              topic, **kwargs)
-
-    def reconnect(self, channel):
-        super(NotifyPublisher, self).reconnect(channel)
-
-        # NOTE(jerdfelt): Normally the consumer would create the queue, but
-        # we do this to ensure that messages don't get dropped if the
-        # consumer is started after we do
-        queue = kombu.entity.Queue(channel=channel,
-                                   exchange=self.exchange,
-                                   durable=self.durable,
-                                   auto_delete=self.auto_delete,
-                                   name=self.routing_key,
-                                   routing_key=self.routing_key,
-                                   queue_arguments=self.queue_arguments)
-        queue.declare()
+            return lambda: threading.current_thread()
 
 
 class DummyConnectionLock(object):
@@ -585,8 +473,6 @@ class Connection(object):
     pools = {}
 
     def __init__(self, conf, url, purpose):
-        self.consumers = []
-        self.consumer_num = itertools.count(1)
         self.conf = conf
         self.driver_conf = self.conf.oslo_messaging_rabbit
         self.max_retries = self.driver_conf.rabbit_max_retries
@@ -645,7 +531,8 @@ class Connection(object):
 
         self._initial_pid = os.getpid()
 
-        self.do_consume = True
+        self._consumers = []
+        self._new_consumers = []
         self._consume_loop_stopped = False
         self.channel = None
 
@@ -661,9 +548,10 @@ class Connection(object):
             self._url, ssl=self._fetch_ssl_params(),
             login_method=self._login_method,
             failover_strategy="shuffle",
-            heartbeat=self.driver_conf.heartbeat_timeout_threshold)
+            heartbeat=self.driver_conf.heartbeat_timeout_threshold,
+            transport_options={'confirm_publish': True})
 
-        LOG.info(_LI('Connecting to AMQP server on %(hostname)s:%(port)d'),
+        LOG.info(_LI('Connecting to AMQP server on %(hostname)s:%(port)s'),
                  self.connection.info())
 
         # NOTE(sileht): kombu recommend to run heartbeat_check every
@@ -685,20 +573,28 @@ class Connection(object):
         # NOTE(sileht): if purpose is PURPOSE_LISTEN
         # the consume code does the heartbeat stuff
         # we don't need a thread
+        self._heartbeat_thread = None
         if purpose == rpc_amqp.PURPOSE_SEND:
             self._heartbeat_start()
 
-        LOG.info(_LI('Connected to AMQP server on %(hostname)s:%(port)d'),
+        LOG.info(_LI('Connected to AMQP server on %(hostname)s:%(port)s'),
                  self.connection.info())
 
-        # NOTE(sileht):
-        # value choosen according the best practice from kombu:
+        # NOTE(sileht): value choosen according the best practice from kombu
         # http://kombu.readthedocs.org/en/latest/reference/kombu.common.html#kombu.common.eventloop
-        self._poll_timeout = 1
+        # For heatbeat, we can set a bigger timeout, and check we receive the
+        # heartbeat packets regulary
+        if self._heartbeat_supported_and_enabled():
+            self._poll_timeout = self._heartbeat_wait_timeout
+        else:
+            self._poll_timeout = 1
 
         if self._url.startswith('memory://'):
             # Kludge to speed up tests.
             self.connection.transport.polling_interval = 0.0
+            # Fixup logging
+            self.connection.hostname = "memory_driver"
+            self.connection.port = 1234
             self._poll_timeout = 0.05
 
     # FIXME(markmc): use oslo sslutils when it is available as a library
@@ -799,11 +695,11 @@ class Connection(object):
             info.update(self.connection.info())
 
             if 'Socket closed' in six.text_type(exc):
-                LOG.error(_LE('AMQP server %(hostname)s:%(port)d closed'
+                LOG.error(_LE('AMQP server %(hostname)s:%(port)s closed'
                               ' the connection. Check login credentials:'
                               ' %(err_str)s'), info)
             else:
-                LOG.error(_LE('AMQP server on %(hostname)s:%(port)d is '
+                LOG.error(_LE('AMQP server on %(hostname)s:%(port)s is '
                               'unreachable: %(err_str)s. Trying again in '
                               '%(sleep_time)d seconds.'), info)
 
@@ -825,21 +721,29 @@ class Connection(object):
             a new channel, we use it the reconfigure our consumers.
             """
             self._set_current_channel(new_channel)
-            self.consumer_num = itertools.count(1)
-            for consumer in self.consumers:
-                consumer.reconnect(new_channel)
+            for consumer in self._consumers:
+                consumer.declare(self)
 
             LOG.info(_LI('Reconnected to AMQP server on '
-                         '%(hostname)s:%(port)d'),
-                     {'hostname': self.connection.hostname,
-                      'port': self.connection.port})
+                         '%(hostname)s:%(port)s'),
+                     self.connection.info())
 
         def execute_method(channel):
             self._set_current_channel(channel)
             method()
 
-        recoverable_errors = (self.connection.recoverable_channel_errors +
-                              self.connection.recoverable_connection_errors)
+        # NOTE(sileht): Some dummy driver like the in-memory one doesn't
+        # have notion of recoverable connection, so we must raise the original
+        # exception like kombu does in this case.
+        has_modern_errors = hasattr(
+            self.connection.transport, 'recoverable_connection_errors',
+        )
+        if has_modern_errors:
+            recoverable_errors = (
+                self.connection.recoverable_channel_errors +
+                self.connection.recoverable_connection_errors)
+        else:
+            recoverable_errors = ()
 
         try:
             autoretry_method = self.connection.autoretry(
@@ -860,13 +764,11 @@ class Connection(object):
             self._set_current_channel(None)
             # NOTE(sileht): number of retry exceeded and the connection
             # is still broken
+            info = {'err_str': exc, 'retry': retry}
+            info.update(self.connection.info())
             msg = _('Unable to connect to AMQP server on '
-                    '%(hostname)s:%(port)d after %(retry)d '
-                    'tries: %(err_str)s') % {
-                        'hostname': self.connection.hostname,
-                        'port': self.connection.port,
-                        'err_str': exc,
-                        'retry': retry}
+                    '%(hostname)s:%(port)s after %(retry)s '
+                    'tries: %(err_str)s') % info
             LOG.error(msg)
             raise exceptions.MessageDeliveryFailure(msg)
         except Exception as exc:
@@ -879,6 +781,7 @@ class Connection(object):
         NOTE(sileht): Must be called within the connection lock
         """
         if self.channel is not None and new_channel != self.channel:
+            self.PUBLISHER_DECLARED_QUEUES.pop(self.channel, None)
             self.connection.maybe_close_channel(self.channel)
         self.channel = new_channel
 
@@ -897,12 +800,12 @@ class Connection(object):
 
         with self._connection_lock:
             try:
-                self._set_current_channel(self.connection.channel())
+                for tag, consumer in enumerate(self._consumers):
+                    consumer.cancel(tag=tag)
             except recoverable_errors:
                 self._set_current_channel(None)
                 self.ensure_connection()
-        self.consumers = []
-        self.consumer_num = itertools.count(1)
+            self._consumers = []
 
     def _heartbeat_supported_and_enabled(self):
         if self.driver_conf.heartbeat_timeout_threshold <= 0:
@@ -915,6 +818,28 @@ class Connection(object):
                          "by the kombu driver or the broker"))
             self._heartbeat_support_log_emitted = True
         return False
+
+    @contextlib.contextmanager
+    def _transport_socket_timeout(self, timeout):
+        # NOTE(sileht): they are some case where the heartbeat check
+        # or the producer.send return only when the system socket
+        # timeout if reach. kombu doesn't allow use to customise this
+        # timeout so for py-amqp we tweak ourself
+        sock = getattr(self.connection.transport, 'sock', None)
+        if sock:
+            orig_timeout = sock.gettimeout()
+            sock.settimeout(timeout)
+        yield
+        if sock:
+            sock.settimeout(orig_timeout)
+
+    def _heartbeat_check(self):
+        # NOTE(sileht): we are suposed to send at least one heartbeat
+        # every heartbeat_timeout_threshold, so no need to way more
+        with self._transport_socket_timeout(
+                self.driver_conf.heartbeat_timeout_threshold):
+            self.connection.heartbeat_check(
+                rate=self.driver_conf.heartbeat_rate)
 
     def _heartbeat_start(self):
         if self._heartbeat_supported_and_enabled():
@@ -944,8 +869,7 @@ class Connection(object):
 
                 try:
                     try:
-                        self.connection.heartbeat_check(
-                            rate=self.driver_conf.heartbeat_rate)
+                        self._heartbeat_check()
                         # NOTE(sileht): We need to drain event to receive
                         # heartbeat from the broker but don't hold the
                         # connection too much times. In amqpdriver a connection
@@ -969,31 +893,28 @@ class Connection(object):
                 timeout=self._heartbeat_wait_timeout)
         self._heartbeat_exit_event.clear()
 
-    def declare_consumer(self, consumer_cls, topic, callback):
+    def declare_consumer(self, consumer):
         """Create a Consumer using the class that was passed in and
         add it to our list of consumers
         """
 
         def _connect_error(exc):
-            log_info = {'topic': topic, 'err_str': exc}
+            log_info = {'topic': consumer.routing_key, 'err_str': exc}
             LOG.error(_("Failed to declare consumer for topic '%(topic)s': "
                       "%(err_str)s"), log_info)
 
         def _declare_consumer():
-            consumer = consumer_cls(self.driver_conf, self.channel, topic,
-                                    callback, six.next(self.consumer_num))
-            self.consumers.append(consumer)
+            consumer.declare(self)
+            self._consumers.append(consumer)
+            self._new_consumers.append(consumer)
             return consumer
 
         with self._connection_lock:
             return self.ensure(_declare_consumer,
                                error_callback=_connect_error)
 
-    def iterconsume(self, limit=None, timeout=None):
-        """Return an iterator that will consume from all queues/consumers.
-
-        NOTE(sileht): Must be called within the connection lock
-        """
+    def consume(self, timeout=None):
+        """Consume from all queues/consumers."""
 
         timer = rpc_common.DecayingTimer(duration=timeout)
         timer.start()
@@ -1003,7 +924,7 @@ class Connection(object):
             raise rpc_common.Timeout()
 
         def _recoverable_error_callback(exc):
-            self.do_consume = True
+            self._new_consumers = self._consumers
             timer.check_return(_raise_timeout, exc)
 
         def _error_callback(exc):
@@ -1012,97 +933,205 @@ class Connection(object):
                       exc)
 
         def _consume():
-            if self.do_consume:
-                queues_head = self.consumers[:-1]  # not fanout.
-                queues_tail = self.consumers[-1]  # fanout
-                for queue in queues_head:
-                    queue.consume(nowait=True)
-                queues_tail.consume(nowait=False)
-                self.do_consume = False
+            # NOTE(sileht): in case the acknowledgement or requeue of a
+            # message fail, the kombu transport can be disconnected
+            # In this case, we must redeclare our consumers, so raise
+            # a recoverable error to trigger the reconnection code.
+            if not self.connection.connected:
+                raise self.connection.recoverable_connection_errors[0]
+
+            if self._new_consumers:
+                for tag, consumer in enumerate(self._consumers):
+                    if consumer in self._new_consumers:
+                        consumer.consume(tag=tag)
+                self._new_consumers = []
 
             poll_timeout = (self._poll_timeout if timeout is None
                             else min(timeout, self._poll_timeout))
             while True:
                 if self._consume_loop_stopped:
-                    self._consume_loop_stopped = False
-                    raise StopIteration
+                    return
+
+                if self._heartbeat_supported_and_enabled():
+                    self._heartbeat_check()
 
                 if self._heartbeat_supported_and_enabled():
                     self.connection.heartbeat_check(
                         rate=self.driver_conf.heartbeat_rate)
                 try:
-                    return self.connection.drain_events(timeout=poll_timeout)
+                    self.connection.drain_events(timeout=poll_timeout)
+                    return
                 except socket.timeout as exc:
                     poll_timeout = timer.check_return(
                         _raise_timeout, exc, maximum=self._poll_timeout)
 
-        for iteration in itertools.count(0):
-            if limit and iteration >= limit:
-                raise StopIteration
-            yield self.ensure(
-                _consume,
-                recoverable_error_callback=_recoverable_error_callback,
-                error_callback=_error_callback)
-
-    @staticmethod
-    def _log_publisher_send_error(topic, exc):
-        log_info = {'topic': topic, 'err_str': exc}
-        LOG.error(_("Failed to publish message to topic "
-                    "'%(topic)s': %(err_str)s"), log_info)
-        LOG.debug('Exception', exc_info=exc)
-
-    default_marker = object()
-
-    def publisher_send(self, cls, topic, msg, timeout=None, retry=None,
-                       error_callback=default_marker, **kwargs):
-        """Send to a publisher based on the publisher class."""
-
-        def _default_error_callback(exc):
-            self._log_publisher_send_error(topic, exc)
-
-        if error_callback is self.default_marker:
-            error_callback = _default_error_callback
-
-        def _publish():
-            publisher = cls(self.driver_conf, self.channel, topic=topic,
-                            **kwargs)
-            publisher.send(msg, timeout)
-
         with self._connection_lock:
-            self.ensure(_publish, retry=retry, error_callback=error_callback)
+            self.ensure(_consume,
+                        recoverable_error_callback=_recoverable_error_callback,
+                        error_callback=_error_callback)
+
+    def stop_consuming(self):
+        self._consume_loop_stopped = True
 
     def declare_direct_consumer(self, topic, callback):
         """Create a 'direct' queue.
         In nova's use, this is generally a msg_id queue used for
         responses for call/multicall
         """
-        self.declare_consumer(DirectConsumer, topic, callback)
+
+        consumer = Consumer(self.driver_conf,
+                            exchange_name=topic,
+                            queue_name=topic,
+                            routing_key=topic,
+                            type='direct',
+                            durable=False,
+                            auto_delete=True,
+                            callback=callback)
+
+        self.declare_consumer(consumer)
 
     def declare_topic_consumer(self, exchange_name, topic, callback=None,
                                queue_name=None):
         """Create a 'topic' consumer."""
-        self.declare_consumer(functools.partial(TopicConsumer,
-                                                name=queue_name,
-                                                exchange_name=exchange_name,
-                                                ),
-                              topic, callback)
+        consumer = Consumer(self.driver_conf,
+                            exchange_name=exchange_name,
+                            queue_name=queue_name or topic,
+                            routing_key=topic,
+                            type='topic',
+                            durable=self.driver_conf.amqp_durable_queues,
+                            auto_delete=self.driver_conf.amqp_auto_delete,
+                            callback=callback)
+
+        self.declare_consumer(consumer)
 
     def declare_fanout_consumer(self, topic, callback):
         """Create a 'fanout' consumer."""
-        self.declare_consumer(FanoutConsumer, topic, callback)
 
-    def direct_send(self, msg_id, msg):
-        """Send a 'direct' message."""
+        unique = uuid.uuid4().hex
+        exchange_name = '%s_fanout' % topic
+        queue_name = '%s_fanout_%s' % (topic, unique)
 
-        timer = rpc_common.DecayingTimer(duration=60)
+        consumer = Consumer(self.driver_conf,
+                            exchange_name=exchange_name,
+                            queue_name=queue_name,
+                            routing_key=topic,
+                            type='fanout',
+                            durable=False,
+                            auto_delete=True,
+                            callback=callback,
+                            nowait=False)
+
+        self.declare_consumer(consumer)
+
+    def _ensure_publishing(self, method, exchange, msg, routing_key=None,
+                           timeout=None, retry=None):
+        """Send to a publisher based on the publisher class."""
+
+        def _error_callback(exc):
+            log_info = {'topic': exchange.name, 'err_str': exc}
+            LOG.error(_("Failed to publish message to topic "
+                        "'%(topic)s': %(err_str)s"), log_info)
+            LOG.debug('Exception', exc_info=exc)
+
+        method = functools.partial(method, exchange, msg, routing_key, timeout)
+
+        with self._connection_lock:
+            self.ensure(method, retry=retry, error_callback=_error_callback)
+
+    def _publish(self, exchange, msg, routing_key=None, timeout=None):
+        """Publish a message."""
+        producer = kombu.messaging.Producer(exchange=exchange,
+                                            channel=self.channel,
+                                            routing_key=routing_key)
+
+        expiration = None
+        if timeout:
+            # AMQP TTL is in milliseconds when set in the property.
+            # Details: http://www.rabbitmq.com/ttl.html#per-message-ttl
+            expiration = int(timeout * 1000)
+
+        # NOTE(sileht): no need to wait more, caller expects
+        # a answer before timeout is reached
+        transport_timeout = timeout
+
+        heartbeat_timeout = self.driver_conf.heartbeat_timeout_threshold
+        if (self._heartbeat_supported_and_enabled() and (
+                transport_timeout is None or
+                transport_timeout > heartbeat_timeout)):
+            # NOTE(sileht): we are supposed to send heartbeat every
+            # heartbeat_timeout, no need to wait more otherwise will
+            # disconnect us, so raise timeout earlier ourself
+            transport_timeout = heartbeat_timeout
+
+        with self._transport_socket_timeout(transport_timeout):
+            producer.publish(msg, expiration=expiration)
+
+    # List of notification queue declared on the channel to avoid
+    # unnecessary redeclaration. This list is resetted each time
+    # the connection is resetted in Connection._set_current_channel
+    PUBLISHER_DECLARED_QUEUES = collections.defaultdict(set)
+
+    def _publish_and_creates_default_queue(self, exchange, msg,
+                                           routing_key=None, timeout=None):
+        """Publisher that declares a default queue
+
+        When the exchange is missing instead of silently creates an exchange
+        not binded to a queue, this publisher creates a default queue
+        named with the routing_key
+
+        This is mainly used to not miss notification in case of nobody consumes
+        them yet. If the future consumer bind the default queue it can retrieve
+        missing messages.
+
+        _set_current_channel is responsible to cleanup the cache.
+        """
+        queue_indentifier = (exchange.name, routing_key)
+        # NOTE(sileht): We only do it once per reconnection
+        # the Connection._set_current_channel() is responsible to clear
+        # this cache
+        if (queue_indentifier not in
+                self.PUBLISHER_DECLARED_QUEUES[self.channel]):
+            queue = kombu.entity.Queue(
+                channel=self.channel,
+                exchange=exchange,
+                durable=exchange.durable,
+                auto_delete=exchange.auto_delete,
+                name=routing_key,
+                routing_key=routing_key,
+                queue_arguments=_get_queue_arguments(self.driver_conf))
+            queue.declare()
+            self.PUBLISHER_DECLARED_QUEUES[self.channel].add(queue_indentifier)
+
+        self._publish(exchange, msg, routing_key=routing_key, timeout=timeout)
+
+    def _publish_and_retry_on_missing_exchange(self, exchange, msg,
+                                               routing_key=None, timeout=None):
+        """Publisher that retry if the exchange is missing.
+        """
+
+        if not exchange.passive:
+            RuntimeError("_publish_and_retry_on_missing_exchange() must be "
+                         "called with an passive exchange.")
+
+        # FIXME(dhellmann): This is a hack to make sure the option
+        # we're about to use is registered. Since we're not going
+        # through a Client object here, it won't be registered by
+        # Client.__init__. We should do this more cleanly.
+        self.conf.register_opts(rpc_client._client_opts)
+
+        # TODO(sileht): use @retrying
+        # NOTE(sileht): no need to wait the application expect a response
+        # before timeout is exshauted
+        duration = (timeout if timeout is not None
+                    else self.conf.rpc_response_timeout)
+
+        timer = rpc_common.DecayingTimer(duration=duration)
         timer.start()
-        # NOTE(sileht): retry at least 60sec, after we have a good change
-        # that the caller is really dead too...
 
         while True:
             try:
-                self.publisher_send(DirectPublisher, msg_id, msg,
-                                    error_callback=None)
+                self._publish(exchange, msg, routing_key=routing_key,
+                              timeout=timeout)
                 return
             except self.connection.channel_errors as exc:
                 # NOTE(noelbk/sileht):
@@ -1114,8 +1143,11 @@ class Connection(object):
                 # the 404 kombu ChannelError and retry until the exchange
                 # appears
                 if exc.code == 404 and timer.check_return() > 0:
-                    LOG.info(_LI("The exchange to reply to %s doesn't "
-                                 "exist yet, retrying...") % msg_id)
+                    LOG.info(_LI("The exchange %(exchange)s to send to "
+                                 "%(routing_key)s doesn't exist yet, "
+                                 "retrying...") % {
+                                     'exchange': exchange.name,
+                                     'routing_key': routing_key})
                     time.sleep(1)
                     continue
                 self._log_publisher_send_error(msg_id, exc)
@@ -1124,32 +1156,47 @@ class Connection(object):
                 self._log_publisher_send_error(msg_id, exc)
                 raise
 
+    def direct_send(self, msg_id, msg):
+        """Send a 'direct' message."""
+        exchange = kombu.entity.Exchange(name=msg_id,
+                                         type='direct',
+                                         durable=False,
+                                         auto_delete=True,
+                                         passive=True)
+
+        self._ensure_publishing(self._publish_and_retry_on_missing_exchange,
+                                exchange, msg, routing_key=msg_id)
+
     def topic_send(self, exchange_name, topic, msg, timeout=None, retry=None):
         """Send a 'topic' message."""
-        self.publisher_send(TopicPublisher, topic, msg, timeout,
-                            exchange_name=exchange_name, retry=retry)
+        exchange = kombu.entity.Exchange(
+            name=exchange_name,
+            type='topic',
+            durable=self.driver_conf.amqp_durable_queues,
+            auto_delete=self.driver_conf.amqp_auto_delete)
+
+        self._ensure_publishing(self._publish, exchange, msg,
+                                routing_key=topic, retry=retry)
 
     def fanout_send(self, topic, msg, retry=None):
         """Send a 'fanout' message."""
-        self.publisher_send(FanoutPublisher, topic, msg, retry=retry)
+        exchange = kombu.entity.Exchange(name='%s_fanout' % topic,
+                                         type='fanout',
+                                         durable=False,
+                                         auto_delete=True)
+
+        self._ensure_publishing(self._publish, exchange, msg, retry=retry)
 
     def notify_send(self, exchange_name, topic, msg, retry=None, **kwargs):
         """Send a notify message on a topic."""
-        self.publisher_send(NotifyPublisher, topic, msg, timeout=None,
-                            exchange_name=exchange_name, retry=retry, **kwargs)
+        exchange = kombu.entity.Exchange(
+            name=exchange_name,
+            type='topic',
+            durable=self.driver_conf.amqp_durable_queues,
+            auto_delete=self.driver_conf.amqp_auto_delete)
 
-    def consume(self, limit=None, timeout=None):
-        """Consume from all queues/consumers."""
-        with self._connection_lock:
-            it = self.iterconsume(limit=limit, timeout=timeout)
-            while True:
-                try:
-                    six.next(it)
-                except StopIteration:
-                    return
-
-    def stop_consuming(self):
-        self._consume_loop_stopped = True
+        self._ensure_publishing(self._publish_and_creates_default_queue,
+                                exchange, msg, routing_key=topic, retry=retry)
 
 
 class RabbitDriver(amqpdriver.AMQPDriverBase):
@@ -1162,15 +1209,19 @@ class RabbitDriver(amqpdriver.AMQPDriverBase):
         conf.register_group(opt_group)
         conf.register_opts(rabbit_opts, group=opt_group)
         conf.register_opts(rpc_amqp.amqp_opts, group=opt_group)
+        conf.register_opts(base.base_opts, group=opt_group)
 
         connection_pool = rpc_amqp.ConnectionPool(
             conf, conf.oslo_messaging_rabbit.rpc_conn_pool_size,
             url, Connection)
 
-        super(RabbitDriver, self).__init__(conf, url,
-                                           connection_pool,
-                                           default_exchange,
-                                           allowed_remote_exmods)
+        super(RabbitDriver, self).__init__(
+            conf, url,
+            connection_pool,
+            default_exchange,
+            allowed_remote_exmods,
+            conf.oslo_messaging_rabbit.send_single_reply,
+        )
 
     def require_features(self, requeue=True):
         pass

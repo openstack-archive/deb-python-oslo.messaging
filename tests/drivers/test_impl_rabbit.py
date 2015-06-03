@@ -20,7 +20,6 @@ import uuid
 
 import fixtures
 import kombu
-import mock
 from oslotest import mockpatch
 import testscenarios
 
@@ -32,6 +31,7 @@ from oslo_messaging._drivers import amqpdriver
 from oslo_messaging._drivers import common as driver_common
 from oslo_messaging._drivers import impl_rabbit as rabbit_driver
 from oslo_messaging.tests import utils as test_utils
+from six.moves import mock
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
@@ -82,24 +82,24 @@ class TestRabbitDriverLoad(test_utils.BaseTestCase):
         self.assertEqual(self.url, url)
 
 
-class TestRabbitIterconsume(test_utils.BaseTestCase):
+class TestRabbitConsume(test_utils.BaseTestCase):
 
-    def test_iterconsume_timeout(self):
+    def test_consume_timeout(self):
         transport = messaging.get_transport(self.conf, 'kombu+memory:////')
         self.addCleanup(transport.cleanup)
-        deadline = time.time() + 3
+        deadline = time.time() + 6
         with transport._driver._get_connection(amqp.PURPOSE_LISTEN) as conn:
-            conn.iterconsume(timeout=3)
+            self.assertRaises(driver_common.Timeout,
+                              conn.consume, timeout=3)
+
             # kombu memory transport doesn't really raise error
             # so just simulate a real driver behavior
             conn.connection.connection.recoverable_channel_errors = (IOError,)
             conn.declare_fanout_consumer("notif.info", lambda msg: True)
             with mock.patch('kombu.connection.Connection.drain_events',
                             side_effect=IOError):
-                try:
-                    conn.consume(timeout=3)
-                except driver_common.Timeout:
-                    pass
+                self.assertRaises(driver_common.Timeout,
+                                  conn.consume, timeout=3)
 
         self.assertEqual(0, int(deadline - time.time()))
 

@@ -12,12 +12,11 @@
 
 import logging
 
-import mock
-
 from oslo import messaging
 from oslo.messaging.notify import log_handler
 from oslo_messaging.tests.notify import test_notifier
 from oslo_messaging.tests import utils as test_utils
+from six.moves import mock
 
 
 class PublishErrorsHandlerTestCase(test_utils.BaseTestCase):
@@ -54,5 +53,5 @@ class PublishErrorsHandlerTestCase(test_utils.BaseTestCase):
         self.publisherrorshandler.emit(logrecord)
         self.assertEqual('error.publisher',
                          self.publisherrorshandler._notifier.publisher_id)
-        mock_notify.assert_called_with(None, 'error_notification',
+        mock_notify.assert_called_with({}, 'error_notification',
                                        {'error': 'Message'}, 'ERROR')

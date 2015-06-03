@@ -28,6 +28,7 @@ import six
 
 from oslo_messaging._drivers import amqp as rpc_amqp
 from oslo_messaging._drivers import amqpdriver
+from oslo_messaging._drivers import base
 from oslo_messaging._drivers import common as rpc_common
 from oslo_messaging._i18n import _
 from oslo_messaging import exceptions
@@ -652,8 +653,8 @@ class Connection(object):
 
         return self.ensure(_connect_error, _declare_consumer)
 
-    def iterconsume(self, limit=None, timeout=None):
-        """Return an iterator that will consume from all queues/consumers."""
+    def consume(self, timeout=None):
+        """Consume from all queues/consumers."""
 
         timer = rpc_common.DecayingTimer(duration=timeout)
         timer.start()
@@ -668,14 +669,14 @@ class Connection(object):
 
         def _consume():
             # NOTE(sileht):
-            # maximun value choosen according the best practice from kombu:
+            # maximum value chosen according the best practice from kombu:
             # http://kombu.readthedocs.org/en/latest/reference/kombu.common.html#kombu.common.eventloop
             poll_timeout = 1 if timeout is None else min(timeout, 1)
 
             while True:
                 if self._consume_loop_stopped:
                     self._consume_loop_stopped = False
-                    raise StopIteration
+                    return
 
                 try:
                     nxt_receiver = self.session.next_receiver(
@@ -692,10 +693,7 @@ class Connection(object):
                 LOG.exception(_("Error processing message. "
                                 "Skipping it."))
 
-        for iteration in itertools.count(0):
-            if limit and iteration >= limit:
-                raise StopIteration
-            yield self.ensure(_error_callback, _consume)
+        self.ensure(_error_callback, _consume)
 
     def publisher_send(self, cls, topic, msg, retry=None, **kwargs):
         """Send to a publisher based on the publisher class."""
@@ -761,15 +759,6 @@ class Connection(object):
         self.publisher_send(NotifyPublisher, topic=topic, msg=msg,
                             exchange_name=exchange_name, retry=retry)
 
-    def consume(self, limit=None, timeout=None):
-        """Consume from all queues/consumers."""
-        it = self.iterconsume(limit=limit, timeout=timeout)
-        while True:
-            try:
-                six.next(it)
-            except StopIteration:
-                return
-
     def stop_consuming(self):
         self._consume_loop_stopped = True
 
@@ -783,12 +772,16 @@ class QpidDriver(amqpdriver.AMQPDriverBase):
         conf.register_group(opt_group)
         conf.register_opts(qpid_opts, group=opt_group)
         conf.register_opts(rpc_amqp.amqp_opts, group=opt_group)
+        conf.register_opts(base.base_opts, group=opt_group)
 
         connection_pool = rpc_amqp.ConnectionPool(
             conf, conf.oslo_messaging_qpid.rpc_conn_pool_size,
             url, Connection)
 
-        super(QpidDriver, self).__init__(conf, url,
-                                         connection_pool,
-                                         default_exchange,
-                                         allowed_remote_exmods)
+        super(QpidDriver, self).__init__(
+            conf, url,
+            connection_pool,
+            default_exchange,
+            allowed_remote_exmods,
+            conf.oslo_messaging_qpid.send_single_reply,
+        )

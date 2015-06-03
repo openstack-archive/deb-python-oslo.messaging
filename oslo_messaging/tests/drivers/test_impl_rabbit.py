@@ -22,7 +22,6 @@ import uuid
 import fixtures
 import kombu
 import kombu.transport.memory
-import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslotest import mockpatch
@@ -34,6 +33,7 @@ from oslo_messaging._drivers import amqpdriver
 from oslo_messaging._drivers import common as driver_common
 from oslo_messaging._drivers import impl_rabbit as rabbit_driver
 from oslo_messaging.tests import utils as test_utils
+from six.moves import mock
 
 load_tests = testscenarios.load_tests_apply_scenarios
 
@@ -169,44 +169,107 @@ class TestRabbitDriverLoadSSL(test_utils.BaseTestCase):
 
         transport._driver._get_connection()
         connection_klass.assert_called_once_with(
-            'memory:///', ssl=self.expected, login_method='AMQPLAIN',
+            'memory:///', transport_options={'confirm_publish': True},
+            ssl=self.expected, login_method='AMQPLAIN',
             heartbeat=0, failover_strategy="shuffle")
 
 
-class TestRabbitIterconsume(test_utils.BaseTestCase):
+class TestRabbitPublisher(test_utils.BaseTestCase):
+    @mock.patch('kombu.messaging.Producer.publish')
+    def test_send_with_timeout(self, fake_publish):
+        transport = oslo_messaging.get_transport(self.conf,
+                                                 'kombu+memory:////')
+        with transport._driver._get_connection(amqp.PURPOSE_SEND) as pool_conn:
+            conn = pool_conn.connection
+            conn._publish(mock.Mock(), 'msg', routing_key='routing_key',
+                          timeout=1)
+        fake_publish.assert_called_with('msg', expiration=1000)
 
-    def test_iterconsume_timeout(self):
+    @mock.patch('kombu.messaging.Producer.publish')
+    def test_send_no_timeout(self, fake_publish):
+        transport = oslo_messaging.get_transport(self.conf,
+                                                 'kombu+memory:////')
+        with transport._driver._get_connection(amqp.PURPOSE_SEND) as pool_conn:
+            conn = pool_conn.connection
+            conn._publish(mock.Mock(), 'msg', routing_key='routing_key')
+        fake_publish.assert_called_with('msg', expiration=None)
+
+    def test_declared_queue_publisher(self):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
         self.addCleanup(transport.cleanup)
-        deadline = time.time() + 3
+
+        e_passive = kombu.entity.Exchange(
+            name='foobar',
+            type='topic',
+            passive=True)
+
+        e_active = kombu.entity.Exchange(
+            name='foobar',
+            type='topic',
+            passive=False)
+
+        with transport._driver._get_connection(amqp.PURPOSE_SEND) as pool_conn:
+            conn = pool_conn.connection
+            exc = conn.connection.channel_errors[0]
+
+            def try_send(exchange):
+                conn._ensure_publishing(
+                    conn._publish_and_creates_default_queue,
+                    exchange, {}, routing_key='foobar')
+
+            # Ensure the exchange does not exists
+            self.assertRaises(exc, try_send, e_passive)
+            # Create it
+            try_send(e_active)
+            # Ensure it creates it
+            try_send(e_passive)
+
+            with mock.patch('kombu.messaging.Producer', side_effect=exc):
+                # Shoud reset the cache and ensures the exchange does
+                # not exists
+                self.assertRaises(exc, try_send, e_passive)
+            # Recreate it
+            try_send(e_active)
+            # Ensure it have been recreated
+            try_send(e_passive)
+
+
+class TestRabbitConsume(test_utils.BaseTestCase):
+
+    def test_consume_timeout(self):
+        transport = oslo_messaging.get_transport(self.conf,
+                                                 'kombu+memory:////')
+        self.addCleanup(transport.cleanup)
+        deadline = time.time() + 6
         with transport._driver._get_connection(amqp.PURPOSE_LISTEN) as conn:
-            conn.iterconsume(timeout=3)
+            self.assertRaises(driver_common.Timeout,
+                              conn.consume, timeout=3)
+
             # kombu memory transport doesn't really raise error
             # so just simulate a real driver behavior
             conn.connection.connection.recoverable_channel_errors = (IOError,)
             conn.declare_fanout_consumer("notif.info", lambda msg: True)
             with mock.patch('kombu.connection.Connection.drain_events',
                             side_effect=IOError):
-                try:
-                    conn.consume(timeout=3)
-                except driver_common.Timeout:
-                    pass
+                self.assertRaises(driver_common.Timeout,
+                                  conn.consume, timeout=3)
 
         self.assertEqual(0, int(deadline - time.time()))
 
-    def test_connection_reset_always_succeed(self):
+    def test_connection_ack_have_disconnected_kombu_connection(self):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
         self.addCleanup(transport.cleanup)
-        channel = mock.Mock()
-        conn = transport._driver._get_connection(amqp.PURPOSE_LISTEN
-                                                 ).connection
-        conn.connection.recoverable_channel_errors = (IOError,)
-        with mock.patch.object(conn.connection, 'channel',
-                               side_effect=[IOError, IOError, channel]):
-            conn.reset()
-            self.assertEqual(channel, conn.channel)
+        with transport._driver._get_connection(amqp.PURPOSE_LISTEN) as conn:
+            channel = conn.connection.channel
+            with mock.patch('kombu.connection.Connection.connected',
+                            new_callable=mock.PropertyMock,
+                            return_value=False):
+                self.assertRaises(driver_common.Timeout,
+                                  conn.connection.consume, timeout=0.01)
+                # Ensure a new channel have been setuped
+                self.assertNotEqual(channel, conn.connection.channel)
 
 
 class TestRabbitTransportURL(test_utils.BaseTestCase):
