@@ -1,4 +1,4 @@
-python-oslo.messaging (1.13.0-1) UNRELEASED; urgency=medium
+python-oslo.messaging (1.13.0-1) experimental; urgency=medium
 
   * New upstream release:
     - d/control: Align version requirements and dependencies with upstream.
@@ -12,7 +12,7 @@ python-oslo.messaging (1.13.0-1) UNRELEASED; urgency=medium
       python-oslo-messaging in Ubuntu.
   * d/*: wrap-and-sort.
 
- -- James Page <james.page@ubuntu.com>  Thu, 21 May 2015 13:59:43 -0700
+ -- James Page <james.page@ubuntu.com>  Tue, 09 Jun 2015 08:52:35 +0100
 
 oslo.messaging (1.8.1-1) unstable; urgency=medium
 
