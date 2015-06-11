@@ -364,16 +364,24 @@ class TestSendReceive(test_utils.BaseTestCase):
         ('timeout', dict(timeout=0.01)),  # FIXME(markmc): timeout=0 is broken?
     ]
 
+    _reply_ending = [
+        ('old_behavior', dict(send_single_reply=False)),
+        ('new_behavior', dict(send_single_reply=True)),
+    ]
+
     @classmethod
     def generate_scenarios(cls):
         cls.scenarios = testscenarios.multiply_scenarios(cls._n_senders,
                                                          cls._context,
                                                          cls._reply,
                                                          cls._failure,
-                                                         cls._timeout)
+                                                         cls._timeout,
+                                                         cls._reply_ending)
 
     def test_send_receive(self):
         self.config(heartbeat_timeout_threshold=0,
+                    group="oslo_messaging_rabbit")
+        self.config(send_single_reply=self.send_single_reply,
                     group="oslo_messaging_rabbit")
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
@@ -599,7 +607,7 @@ def _declare_queue(target):
                                    channel=channel,
                                    exchange=exchange,
                                    routing_key=target.topic)
-    if target.server:
+    elif target.server:
         exchange = kombu.entity.Exchange(name='openstack',
                                          type='topic',
                                          durable=False,
@@ -631,10 +639,8 @@ class TestRequestWireFormat(test_utils.BaseTestCase):
          dict(topic='testtopic', server=None, fanout=False)),
         ('server_target',
          dict(topic='testtopic', server='testserver', fanout=False)),
-        # NOTE(markmc): https://github.com/celery/kombu/issues/195
         ('fanout_target',
-         dict(topic='testtopic', server=None, fanout=True,
-              skip_msg='Requires kombu>2.5.12 to fix kombu issue #195')),
+         dict(topic='testtopic', server=None, fanout=True)),
     ]
 
     _msg = [
@@ -672,8 +678,6 @@ class TestRequestWireFormat(test_utils.BaseTestCase):
         return self.uuids[-1]
 
     def test_request_wire_format(self):
-        if hasattr(self, 'skip_msg'):
-            self.skipTest(self.skip_msg)
 
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
@@ -775,10 +779,8 @@ class TestReplyWireFormat(test_utils.BaseTestCase):
          dict(topic='testtopic', server=None, fanout=False)),
         ('server_target',
          dict(topic='testtopic', server='testserver', fanout=False)),
-        # NOTE(markmc): https://github.com/celery/kombu/issues/195
         ('fanout_target',
-         dict(topic='testtopic', server=None, fanout=True,
-              skip_msg='Requires kombu>2.5.12 to fix kombu issue #195')),
+         dict(topic='testtopic', server=None, fanout=True)),
     ]
 
     _msg = [
@@ -806,8 +808,6 @@ class TestReplyWireFormat(test_utils.BaseTestCase):
                                                          cls._target)
 
     def test_reply_wire_format(self):
-        if hasattr(self, 'skip_msg'):
-            self.skipTest(self.skip_msg)
 
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
@@ -926,15 +926,15 @@ class ConnectionLockTestCase(test_utils.BaseTestCase):
         l = rabbit_driver.ConnectionLock()
         t1 = self._thread(l, 1)
         t2 = self._thread(l, 1)
-        self.assertAlmostEqual(1, t1(), places=1)
-        self.assertAlmostEqual(2, t2(), places=1)
+        self.assertAlmostEqual(1, t1(), places=0)
+        self.assertAlmostEqual(2, t2(), places=0)
 
     def test_worker_and_heartbeat(self):
         l = rabbit_driver.ConnectionLock()
         t1 = self._thread(l, 1)
         t2 = self._thread(l, 1, heartbeat=True)
-        self.assertAlmostEqual(1, t1(), places=1)
-        self.assertAlmostEqual(2, t2(), places=1)
+        self.assertAlmostEqual(1, t1(), places=0)
+        self.assertAlmostEqual(2, t2(), places=0)
 
     def test_workers_and_heartbeat(self):
         l = rabbit_driver.ConnectionLock()
@@ -943,15 +943,15 @@ class ConnectionLockTestCase(test_utils.BaseTestCase):
         t3 = self._thread(l, 1)
         t4 = self._thread(l, 1, heartbeat=True)
         t5 = self._thread(l, 1)
-        self.assertAlmostEqual(1, t1(), places=1)
-        self.assertAlmostEqual(2, t4(), places=1)
-        self.assertAlmostEqual(3, t2(), places=1)
-        self.assertAlmostEqual(4, t3(), places=1)
-        self.assertAlmostEqual(5, t5(), places=1)
+        self.assertAlmostEqual(1, t1(), places=0)
+        self.assertAlmostEqual(2, t4(), places=0)
+        self.assertAlmostEqual(3, t2(), places=0)
+        self.assertAlmostEqual(4, t3(), places=0)
+        self.assertAlmostEqual(5, t5(), places=0)
 
     def test_heartbeat(self):
         l = rabbit_driver.ConnectionLock()
         t1 = self._thread(l, 1, heartbeat=True)
         t2 = self._thread(l, 1)
-        self.assertAlmostEqual(1, t1(), places=1)
-        self.assertAlmostEqual(2, t2(), places=1)
+        self.assertAlmostEqual(1, t1(), places=0)
+        self.assertAlmostEqual(2, t2(), places=0)
