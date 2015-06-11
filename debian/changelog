@@ -1,3 +1,10 @@
+python-oslo.messaging (1.14.0-1) UNRELEASED; urgency=medium
+
+  * Team upload.
+  * New upstream release.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 11 Jun 2015 09:31:39 +0100
+
 python-oslo.messaging (1.13.0-1) experimental; urgency=medium
 
   * New upstream release:
