@@ -2,11 +2,15 @@
 
 PYTHONS:=$(shell pyversions -vr)
 
+LAST_CHANGE = $(shell dpkg-parsechangelog -S Date)
+BUILD_DATE  = $(shell LC_ALL=C date -u "+%B %d, %Y" -d "$(LAST_CHANGE)")
+SPHINXOPTS := -D html_last_updated_fmt="$(BUILD_DATE)"
+
 include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
-	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc,systemd
+	dh $@ --buildsystem=python_distutils --with python2,python3,sphinxdoc,systemd
 
 override_dh_install:
 	set -e && for pyvers in $(PYTHONS); do \
@@ -25,6 +29,6 @@ endif
 
 override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	sphinx-build -b html doc/source $(CURDIR)/debian/python-oslo.messaging/usr/share/doc/python-oslo.messaging/html
+	sphinx-build $(SPHINXOPTS) -b html doc/source $(CURDIR)/debian/python-oslo.messaging/usr/share/doc/python-oslo.messaging/html
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif

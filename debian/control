@@ -48,7 +48,6 @@ Homepage: https://github.com/openstack/oslo.messaging
 
 Package: python-oslo.messaging
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: python-aioeventlet (>= 0.4),
          python-amqp (>= 1.4.0),
          python-concurrent.futures,
@@ -71,11 +70,42 @@ Depends: python-aioeventlet (>= 0.4),
          ${sphinxdoc:Depends},
 Breaks: python-oslo-messaging (<< 1.13.0-1~),
 Replaces: python-oslo-messaging (<< 1.13.0-1~),
-Description: oslo messaging library
+Description: oslo messaging library - Python 2.x
  The oslo.messaging API supports RPC and notifications over a number of
  different messaging transports.
  .
  Oslo is a set of libraries developed for OpenStack.
+ .
+ This package provides the Python 2.x module.
+
+Package: python3-oslo.messaging
+Architecture: all
+Depends: python-aioeventlet (>= 0.4),
+         python-amqp (>= 1.4.0),
+         python-concurrent.futures,
+         python-eventlet (>= 0.17.3),
+         python-kombu (>= 3.0.7),
+         python-oslo.config (>= 1:1.11.0),
+         python-oslo.context (>= 0.2.0),
+         python-oslo.i18n (>= 1.5.0),
+         python-oslo.middleware (>= 1.2.0),
+         python-oslo.serialization (>= 1.4.0),
+         python-oslo.utils (>= 1.4.0),
+         python-pbr,
+         python-six (>= 1.9.0),
+         python-stevedore (>= 1.3.0),
+         python-trollius,
+         python-yaml,
+         python-zmq,
+         ${misc:Depends},
+         ${python3:Depends},
+Description: oslo messaging library - Python 3.x
+ The oslo.messaging API supports RPC and notifications over a number of
+ different messaging transports.
+ .
+ Oslo is a set of libraries developed for OpenStack.
+ .
+ This package provides the Python 3.x module.
 
 Package: oslo-messaging-zmq-receiver
 Architecture: all
