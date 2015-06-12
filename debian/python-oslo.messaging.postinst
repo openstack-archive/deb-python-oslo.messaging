@@ -1,0 +1,11 @@
+#!/bin/sh
+
+set -e
+
+if [ "$1" = "configure" ] ; then
+	update-alternatives --install /usr/bin/oslo-messaging-zmq-receiver oslo-messaging-zmq-receiver /usr/bin/python2-oslo-messaging-zmq-receiver 300
+fi
+
+#DEBHELPER#
+
+exit 0
