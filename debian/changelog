@@ -1,4 +1,4 @@
-python-oslo.messaging (1.13.0-1) experimental; urgency=medium
+python-oslo.messaging (1.13.0-0ubuntu1) wily; urgency=medium
 
   * New upstream release:
     - d/control: Align version requirements and dependencies with upstream.
@@ -11,6 +11,10 @@ python-oslo.messaging (1.13.0-1) experimental; urgency=medium
     - d/control: Add Breaks/Replaces and transitional package for
       python-oslo-messaging in Ubuntu.
   * d/*: wrap-and-sort.
+  * Changes for Ubuntu:
+    - d/control: Drop depends on zmq, qpid, aioeventlet and trolluis
+    - d/p/disable-new-executors.patch: Drop hard requirement on new
+      executors.
 
  -- James Page <james.page@ubuntu.com>  Tue, 09 Jun 2015 08:52:35 +0100
 
