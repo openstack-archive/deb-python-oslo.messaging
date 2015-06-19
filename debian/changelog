@@ -1,4 +1,27 @@
-python-oslo.messaging (1.13.0-0ubuntu1) wily; urgency=medium
+python-oslo.messaging (1.14.0-1ubuntu1) UNRELEASED; urgency=medium
+
+  * Resync with Debian experimental:
+    - d/control: Drop depends on zmq, qpid, aioeventlet and trolluis
+    - d/p/disable-new-executors.patch: Drop hard requirement on new
+      executors.
+
+ -- James Page <james.page@ubuntu.com>  Fri, 19 Jun 2015 17:15:49 +0100
+
+python-oslo.messaging (1.14.0-1) experimental; urgency=medium
+
+  [ James Page ]
+  * Team upload.
+  * New upstream release.
+
+  [ Thomas Goirand ]
+  * Make the build reproducible. Thanks to Juan Picca <jumapico@gmail.com> for
+    the bug report and patch (Closes: #788480).
+  * Added python3 support.
+  * Added oslo-messaging-zmq-receiver.init sysv-rc script.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 11 Jun 2015 23:37:49 +0200
+
+python-oslo.messaging (1.13.0-1) experimental; urgency=medium
 
   * New upstream release:
     - d/control: Align version requirements and dependencies with upstream.
@@ -11,10 +34,6 @@ python-oslo.messaging (1.13.0-0ubuntu1) wily; urgency=medium
     - d/control: Add Breaks/Replaces and transitional package for
       python-oslo-messaging in Ubuntu.
   * d/*: wrap-and-sort.
-  * Changes for Ubuntu:
-    - d/control: Drop depends on zmq, qpid, aioeventlet and trolluis
-    - d/p/disable-new-executors.patch: Drop hard requirement on new
-      executors.
 
  -- James Page <james.page@ubuntu.com>  Tue, 09 Jun 2015 08:52:35 +0100
 

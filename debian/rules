@@ -1,30 +1,48 @@
 #!/usr/bin/make -f
 
 PYTHONS:=$(shell pyversions -vr)
+PYTHON3S:=$(shell py3versions -vr)
+
+LAST_CHANGE = $(shell dpkg-parsechangelog -S Date)
+BUILD_DATE  = $(shell LC_ALL=C date -u "+%B %d, %Y" -d "$(LAST_CHANGE)")
+SPHINXOPTS := -D html_last_updated_fmt="$(BUILD_DATE)"
 
 include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
-	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc,systemd
+	dh $@ --buildsystem=python_distutils --with python2,python3,sphinxdoc,systemd
 
 override_dh_install:
-	set -e && for pyvers in $(PYTHONS); do \
+	set -e ; for pyvers in $(PYTHONS); do \
 		python$$pyvers setup.py install --install-layout=deb \
 			--root $(CURDIR)/debian/python-oslo.messaging; \
 	done
+	set -e ; for pyvers in $(PYTHON3S); do \
+		python$$pyvers setup.py install --install-layout=deb \
+			--root $(CURDIR)/debian/python3-oslo.messaging; \
+	done
+	mv $(CURDIR)/debian/python-oslo.messaging/usr/bin/oslo-messaging-zmq-receiver $(CURDIR)/debian/python-oslo.messaging/usr/bin/python2-oslo-messaging-zmq-receiver
+	mv $(CURDIR)/debian/python3-oslo.messaging/usr/bin/oslo-messaging-zmq-receiver $(CURDIR)/debian/python3-oslo.messaging/usr/bin/python3-oslo-messaging-zmq-receiver
 
 override_dh_auto_test:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
-	set -e && \
-		TEMP_REZ=`mktemp -t` && \
-		PYTHONPATH=. python setup.py testr --slowest --testr-args='--subunit  ' | tee $$TEMP_REZ | subunit2pyunit; \
-		cat $$TEMP_REZ | subunit-filter -s --no-passthrough | subunit-stats || true ; \
-		rm -f $$TEMP_REZ ;
+	@echo "===> Running tests"
+	set -e ; set -x ; for i in 2.7 $(PYTHON3S) ; do \
+		PYMAJOR=`echo $$i | cut -d'.' -f1` ; \
+		echo "===> Testing with python$$i (python$$PYMAJOR)" ; \
+		rm -rf .testrepository ; \
+		testr-python$$PYMAJOR init ; \
+		TEMP_REZ=`mktemp -t` ; \
+		PYTHONPATH=$(CURDIR) PYTHON=python$$i testr-python$$PYMAJOR run --subunit | tee $$TEMP_REZ | subunit2pyunit ; \
+		cat $$TEMP_REZ | subunit-filter -s --no-passthrough | subunit-stats ; \
+		rm -f $$TEMP_REZ ; \
+		testr-python$$PYMAJOR slowest ; \
+	done
 endif
 
 override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
-	sphinx-build -b html doc/source $(CURDIR)/debian/python-oslo.messaging/usr/share/doc/python-oslo.messaging/html
+	sphinx-build $(SPHINXOPTS) -b html doc/source $(CURDIR)/debian/python-oslo.messaging/usr/share/doc/python-oslo.messaging/html
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif

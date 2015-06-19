@@ -13,6 +13,9 @@ Build-Depends: debhelper (>= 9),
                python-pbr,
                python-setuptools,
                python-sphinx,
+               python3-all,
+               python3-pbr,
+               python3-setuptools,
 Build-Depends-Indep: python-amqp (>= 1.4.0),
                      python-concurrent.futures,
                      python-coverage,
@@ -36,6 +39,27 @@ Build-Depends-Indep: python-amqp (>= 1.4.0),
                      python-testscenarios,
                      python-testtools,
                      python-yaml,
+                     python3-amqp (>= 1.4.0),
+                     python3-coverage,
+                     python3-eventlet (>= 0.17.3),
+                     python3-fixtures,
+                     python3-kombu (>= 3.0.7),
+                     python3-mock,
+                     python3-mox3,
+                     python3-oslo.config (>= 1:1.11.0),
+                     python3-oslo.context (>= 0.2.0),
+                     python3-oslo.i18n (>= 1.5.0),
+                     python3-oslo.middleware (>= 1.2.0),
+                     python3-oslo.serialization (>= 1.4.0),
+                     python3-oslo.utils (>= 1.4.0),
+                     python3-oslotest (>= 1.5.1),
+                     python3-redis,
+                     python3-six (>= 1.9.0),
+                     python3-stevedore (>= 1.3.0),
+                     python3-subunit,
+                     python3-testscenarios,
+                     python3-testtools,
+                     python3-yaml,
                      subunit,
                      testrepository,
 Standards-Version: 3.9.6
@@ -45,7 +69,6 @@ Homepage: https://github.com/openstack/oslo.messaging
 
 Package: python-oslo.messaging
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~),
 Depends: python-amqp (>= 1.4.0),
          python-concurrent.futures,
          python-eventlet (>= 0.17.3),
@@ -63,19 +86,47 @@ Depends: python-amqp (>= 1.4.0),
          ${misc:Depends},
          ${python:Depends},
          ${sphinxdoc:Depends},
-Breaks: python-oslo-messaging (<< 1.13.0-0ubuntu1~),
-Replaces: python-oslo-messaging (<< 1.13.0-0ubuntu1~),
-Description: oslo messaging library
+Breaks: python-oslo-messaging (<< 1.13.0-1~),
+Replaces: python-oslo-messaging (<< 1.13.0-1~),
+Description: oslo messaging library - Python 2.x
  The oslo.messaging API supports RPC and notifications over a number of
  different messaging transports.
  .
  Oslo is a set of libraries developed for OpenStack.
+ .
+ This package provides the Python 2.x module.
+
+Package: python3-oslo.messaging
+Architecture: all
+Depends: python3-aioeventlet (>= 0.4),
+         python3-amqp (>= 1.4.0),
+         python3-eventlet (>= 0.17.3),
+         python3-kombu (>= 3.0.7),
+         python3-oslo.config (>= 1:1.11.0),
+         python3-oslo.context (>= 0.2.0),
+         python3-oslo.i18n (>= 1.5.0),
+         python3-oslo.middleware (>= 1.2.0),
+         python3-oslo.serialization (>= 1.4.0),
+         python3-oslo.utils (>= 1.4.0),
+         python3-pbr,
+         python3-six (>= 1.9.0),
+         python3-stevedore (>= 1.3.0),
+         python3-yaml,
+         python3-zmq,
+         ${misc:Depends},
+         ${python3:Depends},
+Description: oslo messaging library - Python 3.x
+ The oslo.messaging API supports RPC and notifications over a number of
+ different messaging transports.
+ .
+ Oslo is a set of libraries developed for OpenStack.
+ .
+ This package provides the Python 3.x module.
 
 Package: oslo-messaging-zmq-receiver
 Architecture: all
 Depends: adduser,
-         python-oslo.messaging (= ${binary:Version}),
-         python-zmq,
+         python-oslo.messaging (= ${binary:Version}) | python3-oslo.messaging (= ${binary:Version}),
          ${misc:Depends},
 Description: Oslo Messaging ZeroMQ receiver daemon
  The Oslo Messaging API supports RPC and notifications over a number of
