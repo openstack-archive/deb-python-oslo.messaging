@@ -1,4 +1,4 @@
-python-oslo.messaging (1.14.0-1) UNRELEASED; urgency=medium
+python-oslo.messaging (1.14.0-1) experimental; urgency=medium
 
   [ James Page ]
   * Team upload.
