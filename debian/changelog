@@ -1,11 +1,11 @@
-python-oslo.messaging (1.14.0-1ubuntu1) UNRELEASED; urgency=medium
+python-oslo.messaging (1.14.0-1ubuntu1) wily; urgency=medium
 
   * Resync with Debian experimental:
     - d/control: Drop depends on zmq, qpid, aioeventlet and trolluis
     - d/p/disable-new-executors.patch: Drop hard requirement on new
       executors.
 
- -- James Page <james.page@ubuntu.com>  Fri, 19 Jun 2015 17:15:49 +0100
+ -- James Page <james.page@ubuntu.com>  Fri, 19 Jun 2015 17:23:28 +0100
 
 python-oslo.messaging (1.14.0-1) experimental; urgency=medium
 
