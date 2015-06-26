@@ -3,3 +3,4 @@ install-missing-files.patch
 Also-install-missing-files-in-oslo-namespaced.patch
 try-using-future-absolute-import.patch
 disable-new-executors.patch
+use-mox3.patch
