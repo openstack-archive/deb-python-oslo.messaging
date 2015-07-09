@@ -149,4 +149,4 @@ Architecture: all
 Depends: python-oslo.messaging,
          ${misc:Depends},
 Description: transitional dummy package for python-oslo-messaging
- This transtional package is safe to remove.
+ This transitional package is safe to remove.
