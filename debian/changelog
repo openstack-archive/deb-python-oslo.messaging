@@ -1,3 +1,9 @@
+python-oslo.messaging (1.14.0-2) UNRELEASED; urgency=medium
+
+  * Fixed upstream VCS url.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 09:19:43 +0000
+
 python-oslo.messaging (1.14.0-1) experimental; urgency=medium
 
   [ James Page ]
