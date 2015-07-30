@@ -4,8 +4,9 @@ python-oslo.messaging (1.14.0-2) UNRELEASED; urgency=medium
     use mox3 instead of using an import of mox from six.moves, resolving
     FTBFS due to changes in oslotest.
   * Fixup typo in transitional package description (LP: #1471561).
+  * Fixed upstream VCS url.
 
- -- James Page <james.page@ubuntu.com>  Fri, 26 Jun 2015 09:23:47 +0100
+ -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 09:19:43 +0000
 
 python-oslo.messaging (1.14.0-1) experimental; urgency=medium
 
