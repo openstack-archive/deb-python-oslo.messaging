@@ -63,8 +63,10 @@ class RPCVersionCapError(exceptions.MessagingException):
     def __init__(self, version, version_cap):
         self.version = version
         self.version_cap = version_cap
-        msg = ("Requested message version, %(version)s is too high. It needs "
-               "to be lower than the specified version cap %(version_cap)s." %
+        msg = ("Requested message version, %(version)s is incompatible.  It "
+               "needs to be equal in major version and less than or equal "
+               "in minor version as the specified version cap "
+               "%(version_cap)s." %
                dict(version=self.version, version_cap=self.version_cap))
         super(RPCVersionCapError, self).__init__(msg)
 
@@ -164,6 +166,14 @@ class _CallContext(object):
                  version=_marker, server=_marker, fanout=_marker,
                  timeout=_marker, version_cap=_marker, retry=_marker):
         """Prepare a method invocation context. See RPCClient.prepare()."""
+        if version is not None and version is not cls._marker:
+            # quick sanity check to make sure parsable version numbers are used
+            try:
+                utils.version_is_compatible(version, version)
+            except (IndexError, ValueError):
+                raise exceptions.MessagingException(
+                    "Version must contain a major and minor integer. Got %s"
+                    % version)
         kwargs = dict(
             exchange=exchange,
             topic=topic,

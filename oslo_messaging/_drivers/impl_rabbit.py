@@ -136,7 +136,7 @@ rabbit_opts = [
                      'If you change this option, you must wipe the '
                      'RabbitMQ database.'),
     cfg.IntOpt('heartbeat_timeout_threshold',
-               default=0,
+               default=60,
                help="Number of seconds after which the Rabbit broker is "
                "considered down if heartbeat's keep-alive fails "
                "(0 disable the heartbeat). EXPERIMENTAL"),
@@ -452,8 +452,8 @@ class Connection(object):
                     adr, default_port=self.rabbit_port)
                 self._url += '%samqp://%s:%s@%s:%s/%s' % (
                     ";" if self._url else '',
-                    parse.quote(self.rabbit_userid),
-                    parse.quote(self.rabbit_password),
+                    parse.quote(self.rabbit_userid, ''),
+                    parse.quote(self.rabbit_password, ''),
                     self._parse_url_hostname(hostname), port,
                     virtual_host)
 
@@ -477,7 +477,12 @@ class Connection(object):
             login_method=self.login_method,
             failover_strategy="shuffle",
             heartbeat=self.heartbeat_timeout_threshold,
-            transport_options={'confirm_publish': True})
+            transport_options={
+                'confirm_publish': True,
+                'on_blocked': self._on_connection_blocked,
+                'on_unblocked': self._on_connection_unblocked,
+            },
+        )
 
         LOG.info(_LI('Connecting to AMQP server on %(hostname)s:%(port)s'),
                  self.connection.info())
@@ -580,6 +585,14 @@ class Connection(object):
                 ssl_params['cert_reqs'] = ssl.CERT_REQUIRED
             return ssl_params or True
         return False
+
+    @staticmethod
+    def _on_connection_blocked(reason):
+        LOG.error(_LE("The broker has blocked the connection: %s"), reason)
+
+    @staticmethod
+    def _on_connection_unblocked():
+        LOG.info(_LI("The broker has unblocked the connection"))
 
     def ensure_connection(self):
         self.ensure(method=lambda: True)
@@ -829,7 +842,7 @@ class Connection(object):
         def _connect_error(exc):
             log_info = {'topic': consumer.routing_key, 'err_str': exc}
             LOG.error(_("Failed to declare consumer for topic '%(topic)s': "
-                      "%(err_str)s"), log_info)
+                        "%(err_str)s"), log_info)
 
         def _declare_consumer():
             consumer.declare(self)
@@ -1034,8 +1047,8 @@ class Connection(object):
         """
 
         if not exchange.passive:
-            RuntimeError("_publish_and_retry_on_missing_exchange() must be "
-                         "called with an passive exchange.")
+            raise RuntimeError("_publish_and_retry_on_missing_exchange() must "
+                               "be called with an passive exchange.")
 
         # TODO(sileht): use @retrying
         # NOTE(sileht): no need to wait the application expect a response
@@ -1068,8 +1081,17 @@ class Connection(object):
                                  "retrying...") % {
                                      'exchange': exchange.name,
                                      'routing_key': routing_key})
-                    time.sleep(1)
+                    time.sleep(0.25)
                     continue
+                elif exc.code == 404:
+                    msg = _("The exchange %(exchange)s to send to "
+                            "%(routing_key)s still doesn't exist after "
+                            "%(duration)s sec abandonning...") % {
+                                'duration': duration,
+                                'exchange': exchange.name,
+                                'routing_key': routing_key}
+                    LOG.info(msg)
+                    raise rpc_amqp.AMQPDestinationNotFound(msg)
                 raise
 
     def direct_send(self, msg_id, msg):
@@ -1116,6 +1138,15 @@ class Connection(object):
 
 
 class RabbitDriver(amqpdriver.AMQPDriverBase):
+    """RabbitMQ Driver
+
+    The ``rabbit`` driver is the default driver used in OpenStack's
+    integration tests.
+
+    The driver is aliased as ``kombu`` to support upgrading existing
+    installations with older settings.
+
+    """
 
     def __init__(self, conf, url,
                  default_exchange=None,

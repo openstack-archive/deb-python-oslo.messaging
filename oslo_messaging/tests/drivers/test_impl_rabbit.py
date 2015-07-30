@@ -58,12 +58,6 @@ class TestDeprecatedRabbitDriverLoad(test_utils.BaseTestCase):
 
 class TestHeartbeat(test_utils.BaseTestCase):
 
-    def setUp(self):
-        super(TestHeartbeat, self).setUp(
-            conf=cfg.ConfigOpts())
-        self.config(heartbeat_timeout_threshold=60,
-                    group='oslo_messaging_rabbit')
-
     @mock.patch('oslo_messaging._drivers.impl_rabbit.LOG')
     @mock.patch('kombu.connection.Connection.heartbeat_check')
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.'
@@ -128,7 +122,7 @@ class TestRabbitDriverLoad(test_utils.BaseTestCase):
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.ensure')
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.reset')
     def test_driver_load(self, fake_ensure, fake_reset):
-        self.config(heartbeat_timeout_threshold=0,
+        self.config(heartbeat_timeout_threshold=60,
                     group='oslo_messaging_rabbit')
         self.messaging_conf.transport_driver = self.transport_driver
         transport = oslo_messaging.get_transport(self.conf)
@@ -169,9 +163,11 @@ class TestRabbitDriverLoadSSL(test_utils.BaseTestCase):
 
         transport._driver._get_connection()
         connection_klass.assert_called_once_with(
-            'memory:///', transport_options={'confirm_publish': True},
+            'memory:///', transport_options={'confirm_publish': True,
+                                             'on_blocked': mock.ANY,
+                                             'on_unblocked': mock.ANY},
             ssl=self.expected, login_method='AMQPLAIN',
-            heartbeat=0, failover_strategy="shuffle")
+            heartbeat=60, failover_strategy="shuffle")
 
 
 class TestRabbitPublisher(test_utils.BaseTestCase):
@@ -305,7 +301,6 @@ class TestRabbitTransportURL(test_utils.BaseTestCase):
               )),
         ('rabbit_ipv6',
          dict(url='rabbit://u:p@[fd00:beef:dead:55::133]:10/vhost',
-              skip_py26='python 2.6 has broken urlparse for ipv6',
               expected=['amqp://u:p@[fd00:beef:dead:55::133]:10/vhost'])),
         ('rabbit_ipv4',
          dict(url='rabbit://user:password@10.20.30.40:10/vhost',
@@ -321,9 +316,6 @@ class TestRabbitTransportURL(test_utils.BaseTestCase):
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.ensure')
     @mock.patch('oslo_messaging._drivers.impl_rabbit.Connection.reset')
     def test_transport_url(self, fake_reset, fake_ensure):
-        if hasattr(self, 'skip_py26') and sys.version_info < (2, 7):
-            self.skipTest(self.skip_py26)
-
         transport = oslo_messaging.get_transport(self.conf, self.url)
         self.addCleanup(transport.cleanup)
         driver = transport._driver
@@ -353,6 +345,11 @@ class TestSendReceive(test_utils.BaseTestCase):
         ('zero', dict(rx_id=False, reply=0)),
     ]
 
+    _reply_fail = [
+        ('reply_success', dict(reply_failure_404=False)),
+        ('reply_failure', dict(reply_failure_404=True)),
+    ]
+
     _failure = [
         ('success', dict(failure=False)),
         ('failure', dict(failure=True, expected=False)),
@@ -374,11 +371,14 @@ class TestSendReceive(test_utils.BaseTestCase):
         cls.scenarios = testscenarios.multiply_scenarios(cls._n_senders,
                                                          cls._context,
                                                          cls._reply,
+                                                         cls._reply_fail,
                                                          cls._failure,
                                                          cls._timeout,
                                                          cls._reply_ending)
 
     def test_send_receive(self):
+        self.config(kombu_reconnect_timeout=0.5,
+                    group="oslo_messaging_rabbit")
         self.config(heartbeat_timeout_threshold=0,
                     group="oslo_messaging_rabbit")
         self.config(send_single_reply=self.send_single_reply,
@@ -407,16 +407,21 @@ class TestSendReceive(test_utils.BaseTestCase):
 
         def send_and_wait_for_reply(i):
             try:
+                if self.reply_failure_404:
+                    timeout = 0.01
+                else:
+                    timeout = self.timeout
                 replies.append(driver.send(target,
                                            self.ctxt,
                                            {'tx_id': i},
                                            wait_for_reply=True,
-                                           timeout=self.timeout))
+                                           timeout=timeout))
                 self.assertFalse(self.failure)
                 self.assertIsNone(self.timeout)
             except (ZeroDivisionError, oslo_messaging.MessagingTimeout) as e:
                 replies.append(e)
-                self.assertTrue(self.failure or self.timeout is not None)
+                self.assertTrue(self.failure or self.timeout is not None
+                                or self.reply_failure_404)
 
         while len(senders) < self.n_senders:
             senders.append(threading.Thread(target=send_and_wait_for_reply,
@@ -436,6 +441,18 @@ class TestSendReceive(test_utils.BaseTestCase):
         if len(order) > 1:
             order[-1], order[-2] = order[-2], order[-1]
 
+        if self.reply_failure_404:
+            start = time.time()
+            # NOTE(sileht): Simulate a rpc client restart
+            # By returning a ExchangeNotFound when we try to
+            # send reply
+            exc = (driver._reply_q_conn.connection.
+                   connection.channel_errors[0]())
+            exc.code = 404
+            self.useFixture(mockpatch.Patch(
+                'kombu.messaging.Producer.publish',
+                side_effect=exc))
+
         for i in order:
             if self.timeout is None:
                 if self.failure:
@@ -449,11 +466,21 @@ class TestSendReceive(test_utils.BaseTestCase):
                     msgs[i].reply({'rx_id': i})
                 else:
                     msgs[i].reply(self.reply)
+            elif self.reply_failure_404:
+                msgs[i].reply({})
             senders[i].join()
+
+        if self.reply_failure_404:
+            # NOTE(sileht) all reply fail, first take
+            # kombu_reconnect_timeout seconds to fail
+            # next immediatly fail
+            dt = time.time() - start
+            timeout = self.conf.oslo_messaging_rabbit.kombu_reconnect_timeout
+            self.assertTrue(timeout <= dt < (timeout + 0.100), dt)
 
         self.assertEqual(len(senders), len(replies))
         for i, reply in enumerate(replies):
-            if self.timeout is not None:
+            if self.timeout is not None or self.reply_failure_404:
                 self.assertIsInstance(reply, oslo_messaging.MessagingTimeout)
             elif self.failure:
                 self.assertIsInstance(reply, ZeroDivisionError)
