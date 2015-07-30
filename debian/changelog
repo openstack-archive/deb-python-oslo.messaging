@@ -2,6 +2,7 @@ python-oslo.messaging (2.1.0-1) experimental; urgency=medium
 
   * New upstream release.
   * Fixed upstream VCS url.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 09:19:43 +0000
 
