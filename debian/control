@@ -116,8 +116,7 @@ Description: oslo messaging library - Python 2.x
 
 Package: python3-oslo.messaging
 Architecture: all
-Depends: python3-aioeventlet (>= 0.4),
-         python3-amqp (>= 1.4.0),
+Depends: python3-amqp (>= 1.4.0),
          python3-cachetools,
          python3-eventlet (>= 0.17.4),
          python3-futurist,
@@ -136,7 +135,6 @@ Depends: python3-aioeventlet (>= 0.4),
          python3-stevedore (>= 1.5.0),
          python3-webob,
          python3-yaml,
-         python3-zmq,
          ${misc:Depends},
          ${python3:Depends},
 Description: oslo messaging library - Python 3.x

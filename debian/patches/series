@@ -2,7 +2,6 @@ do-not-run-toplevel-test.patch
 install-missing-files.patch
 Also-install-missing-files-in-oslo-namespaced.patch
 try-using-future-absolute-import.patch
-use-mox3.patch
 fixes-monkey_patch-call.patch
 # Ubuntu
 disable-new-executors.patch

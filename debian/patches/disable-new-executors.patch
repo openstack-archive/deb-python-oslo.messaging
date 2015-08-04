@@ -4,10 +4,10 @@ Forwarded: not-needed
 
 --- a/requirements.txt
 +++ b/requirements.txt
-@@ -32,7 +32,3 @@ oslo.middleware>=1.2.0
- 
+@@ -48,7 +48,3 @@ oslo.middleware>=2.4.0 # Apache-2.0
+ #
  # for the futures based executor
- futures>=3.0
+ futures>=3.0;python_version=='2.7' or python_version=='2.6'
 -
 -# needed by the aioeventlet executor
 -aioeventlet>=0.4
