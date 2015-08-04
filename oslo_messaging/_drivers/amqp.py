@@ -153,7 +153,8 @@ class ConnectionContext(rpc_common.Connection):
                         self.connection.close()
                     except Exception:
                         pass
-                else:
+                    self.connection = self.connection_pool.create()
+                finally:
                     self.connection_pool.put(self.connection)
             else:
                 try:
@@ -263,3 +264,7 @@ def _add_unique_id(msg):
     """Add unique_id for checking duplicate messages."""
     unique_id = uuid.uuid4().hex
     msg.update({UNIQUE_ID: unique_id})
+
+
+class AMQPDestinationNotFound(Exception):
+    pass

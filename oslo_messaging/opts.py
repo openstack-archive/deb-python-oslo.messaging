@@ -29,7 +29,7 @@ from oslo_messaging._drivers import matchmaker
 from oslo_messaging._drivers import matchmaker_redis
 from oslo_messaging._drivers import matchmaker_ring
 from oslo_messaging._drivers.protocols.amqp import opts as amqp_opts
-from oslo_messaging._executors import base
+from oslo_messaging._executors import impl_pooledexecutor
 from oslo_messaging.notify import notifier
 from oslo_messaging.rpc import client
 from oslo_messaging import transport
@@ -38,7 +38,7 @@ _global_opt_lists = [
     drivers_base.base_opts,
     impl_zmq.zmq_opts,
     matchmaker.matchmaker_opts,
-    base._pool_opts,
+    impl_pooledexecutor._pool_opts,
     notifier._notifier_opts,
     client._client_opts,
     transport._transport_opts,
@@ -76,3 +76,23 @@ def list_opts():
     :returns: a list of (group_name, opts) tuples
     """
     return [(g, copy.deepcopy(o)) for g, o in _opts]
+
+
+def set_defaults(conf, executor_thread_pool_size=None):
+    """Set defaults for configuration variables.
+
+    Overrides default options values.
+
+    :param conf: Config instance specified to set default options in it. Using
+     of instances instead of a global config object prevents conflicts between
+     options declaration.
+    :type conf: oslo.config.cfg.ConfigOpts instance.
+
+    :keyword executor_thread_pool_size: Size of executor thread pool.
+    :type executor_thread_pool_size: int
+    :default executor_thread_pool_size: None
+
+    """
+    if executor_thread_pool_size is not None:
+        conf.set_default('executor_thread_pool_size',
+                         executor_thread_pool_size)

@@ -46,7 +46,9 @@ LOG = logging.getLogger(__name__)
 
 def marshal_response(reply=None, failure=None):
     # TODO(grs): do replies have a context?
-    msg = proton.Message()
+    # NOTE(flaper87): Set inferred to True since rabbitmq-amqp-1.0 doesn't
+    # have support for vbin8.
+    msg = proton.Message(inferred=True)
     if failure:
         failure = common.serialize_remote_exception(failure)
         data = {"failure": failure}
@@ -67,7 +69,9 @@ def unmarshal_response(message, allowed):
 
 
 def marshal_request(request, context, envelope):
-    msg = proton.Message()
+    # NOTE(flaper87): Set inferred to True since rabbitmq-amqp-1.0 doesn't
+    # have support for vbin8.
+    msg = proton.Message(inferred=True)
     if envelope:
         request = common.serialize_msg(request)
     data = {
@@ -121,6 +125,10 @@ class ProtonListener(base.Listener):
 
 
 class ProtonDriver(base.BaseDriver):
+    """AMQP 1.0 Driver
+
+    See :doc:`AMQP1.0` for details.
+    """
 
     def __init__(self, conf, url,
                  default_exchange=None, allowed_remote_exmods=[]):
@@ -185,16 +193,16 @@ class ProtonDriver(base.BaseDriver):
         LOG.debug("Send to %s", target)
         task = drivertasks.SendTask(target, request, wait_for_reply, expire)
         self._ctrl.add_task(task)
-        result = None
-        if wait_for_reply:
-            # the following can raise MessagingTimeout if no reply received:
-            reply = task.get_reply(timeout)
+        # wait for the eventloop to process the command. If the command is
+        # an RPC call retrieve the reply message
+        reply = task.wait(timeout)
+        if reply:
             # TODO(kgiusti) how to handle failure to un-marshal?  Must log, and
             # determine best way to communicate this failure back up to the
             # caller
-            result = unmarshal_response(reply, self._allowed_remote_exmods)
+            reply = unmarshal_response(reply, self._allowed_remote_exmods)
         LOG.debug("Send to %s returning", target)
-        return result
+        return reply
 
     @_ensure_connect_called
     def send_notification(self, target, ctxt, message, version,

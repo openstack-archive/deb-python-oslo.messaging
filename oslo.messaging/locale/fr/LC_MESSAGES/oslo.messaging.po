@@ -10,9 +10,9 @@ msgid ""
 msgstr ""
 "Project-Id-Version:  oslo.messaging\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-06-04 06:08+0000\n"
-"PO-Revision-Date: 2015-06-03 23:46+0000\n"
-"Last-Translator: Maxime COQUEREL <max.coquerel@gmail.com>\n"
+"POT-Creation-Date: 2015-07-23 06:14+0000\n"
+"PO-Revision-Date: 2015-07-11 03:20+0000\n"
+"Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language-Team: French (http://www.transifex.com/projects/p/oslomessaging/"
 "language/fr/)\n"
 "Plural-Forms: nplurals=2; plural=(n > 1)\n"
@@ -20,34 +20,6 @@ msgstr ""
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 1.3\n"
-
-#, python-format
-msgid ""
-"%(what)s is deprecated as of %(as_of)s and may be removed in %(remove_in)s. "
-"It will not be superseded."
-msgstr ""
-"%(what)s déprécié depuis %(as_of)s et sera sans doute retiré dans "
-"%(remove_in)s. Ne sera pas remplacé. "
-
-#, python-format
-msgid ""
-"%(what)s is deprecated as of %(as_of)s in favor of %(in_favor_of)s and may "
-"be removed in %(remove_in)s."
-msgstr ""
-"%(what)s déprécié depuis %(as_of)s au bénéfice de %(in_favor_of)s et sera "
-"sans doute retiré dans %(remove_in)s. "
-
-#, python-format
-msgid "%(what)s is deprecated as of %(as_of)s in favor of %(in_favor_of)s."
-msgstr "%(what)s déprécié depuis %(as_of)s au bénéfice de %(in_favor_of)s. "
-
-#, python-format
-msgid "%(what)s is deprecated as of %(as_of)s. It will not be superseded."
-msgstr "%(what)s déprécié depuis %(as_of)s. Ne sera pas remplacé. "
-
-#, python-format
-msgid "Deprecated: %s"
-msgstr "Déprécié: %s"
 
 #, python-format
 msgid "Exception during message handling: %s"
@@ -58,12 +30,5 @@ msgid "Failed to load any notifiers for %s"
 msgstr "Echec de chargement des notifications pour %s"
 
 #, python-format
-msgid "Fatal call to deprecated config: %(msg)s"
-msgstr "Appel fatal à config dépréciée : %(msg)s "
-
-#, python-format
 msgid "Routing '%(event)s' notification to '%(driver)s' driver"
 msgstr "Routage '%(event)s' notification du pilote %(driver)s'"
-
-msgid "Unexpected exception occurred."
-msgstr "Exception inattendue s'est produite."

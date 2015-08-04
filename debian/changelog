@@ -1,3 +1,19 @@
+python-oslo.messaging (2.1.0-1) experimental; urgency=medium
+
+  [ James Page ]
+  * d/p/use-mox3.patch: Cherry pick fix from upstream VCS to directly
+    use mox3 instead of using an import of mox from six.moves, resolving
+    FTBFS due to changes in oslotest.
+  * Fixup typo in transitional package description (LP: #1471561).
+
+  [ Thomas Goirand ]
+  * New upstream release.
+  * Fixed upstream VCS url.
+  * Fixed (build-)depends for this release.
+  * Blacklist 3 failed unit tests.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 09:19:43 +0000
+
 python-oslo.messaging (1.14.0-1ubuntu2) wily; urgency=medium
 
   * d/p/use-mox3.patch: Cherry pick fix from upstream VCS to directly

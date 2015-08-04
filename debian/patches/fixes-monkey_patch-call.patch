@@ -1,0 +1,13 @@
+Description: Fixes monkey_patch() call
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2015-06-19
+
+--- python-oslo.messaging-1.14.0.orig/oslo_messaging/tests/__init__.py
++++ python-oslo.messaging-1.14.0/oslo_messaging/tests/__init__.py
+@@ -24,4 +24,4 @@ except ImportError:
+ else:
+     # Ensure that eventlet monkey patching is enabled before loading the qpid
+     # module, otherwise qpid will hang
+-    eventlet.monkey_patch()
++    eventlet.patcher.monkey_patch()
