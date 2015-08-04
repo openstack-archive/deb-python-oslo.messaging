@@ -1,3 +1,12 @@
+python-oslo.messaging (2.1.0-1ubuntu1) UNRELEASED; urgency=medium
+
+  * Merge from Debian experimental, remaining changes:
+    - d/control: Drop depends on zmq, qpid, aioeventlet and trolluis
+    - d/p/disable-new-executors.patch: Drop hard requirement on new
+      executors.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 04 Aug 2015 10:44:05 +0200
+
 python-oslo.messaging (2.1.0-1) experimental; urgency=medium
 
   [ James Page ]
