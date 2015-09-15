@@ -48,3 +48,7 @@ ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	sphinx-build $(SPHINXOPTS) -b html doc/source $(CURDIR)/debian/python-oslo.messaging/usr/share/doc/python-oslo.messaging/html
 	dh_sphinxdoc -O--buildsystem=python_distutils
 endif
+
+override_dh_auto_clean:
+	# Don't attempt to fetch pbr from PyPi...
+	http_proxy=127.0.0.1:9 https_proxy=127.0.0.1:9 dh_auto_clean -O--buildsystem=python_distutils
