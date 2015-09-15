@@ -36,7 +36,7 @@ ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 		rm -rf .testrepository ; \
 		testr-python$$PYMAJOR init ; \
 		TEMP_REZ=`mktemp -t` ; \
-		PYTHONPATH=$(CURDIR) PYTHON=python$$i testr-python$$PYMAJOR run --subunit 'oslo_messaging\.tests\.(?!(.*drivers.test_impl_rabbit\.TestRabbitDriverLoad\.test_driver_load.*|.*test_transport.GetTransportSadPathTestCase.test_get_transport_sad.*))' | tee $$TEMP_REZ | subunit2pyunit ; \
+		PYTHONPATH=$(CURDIR) PYTHON=python$$i testr-python$$PYMAJOR run --subunit 'oslo_messaging\.tests\.(?!(.*drivers.test_impl_rabbit\.TestRabbitDriverLoad\.test_driver_load.*|.*test_transport.GetTransportSadPathTestCase.test_get_transport_sad.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*))' | tee $$TEMP_REZ | subunit2pyunit ; \
 		cat $$TEMP_REZ | subunit-filter -s --no-passthrough | subunit-stats ; \
 		rm -f $$TEMP_REZ ; \
 		testr-python$$PYMAJOR slowest ; \
