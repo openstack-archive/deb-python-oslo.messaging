@@ -31,20 +31,11 @@ class RestartableServerThread(object):
     def __init__(self, server):
         self.server = server
         self.thread = None
-        self._started = threading.Event()
-        self._tombstone = threading.Event()
 
     def start(self):
-        self._tombstone.clear()
         if self.thread is None:
             self.thread = test_utils.ServerThreadHelper(self.server)
             self.thread.start()
-            self._started.wait()
-
-    def _target(self):
-        self.server.start()
-        self._started.set()
-        self._tombstone.wait()
 
     def stop(self):
         if self.thread is not None:
