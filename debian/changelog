@@ -1,6 +1,7 @@
 python-oslo.messaging (2.5.0-1) experimental; urgency=medium
 
   * New upstream release.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 27 Sep 2015 18:16:47 +0200
 
