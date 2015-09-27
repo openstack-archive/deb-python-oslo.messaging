@@ -167,6 +167,7 @@ Description: Oslo Messaging ZeroMQ receiver daemon
 
 Package: python-oslo-messaging
 Section: oldlibs
+Priority: extra
 Architecture: all
 Depends: python-oslo.messaging,
          ${misc:Depends},
