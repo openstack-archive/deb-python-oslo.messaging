@@ -4,14 +4,15 @@
 # project.
 #
 # Translators:
+# Lucas Mascaro <mascaro.lucas@yahoo.fr>, 2015
 # Maxime COQUEREL <max.coquerel@gmail.com>, 2014
 msgid ""
 msgstr ""
 "Project-Id-Version: oslo.messaging\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-04 06:29+0000\n"
-"PO-Revision-Date: 2014-09-25 08:57+0000\n"
-"Last-Translator: Maxime COQUEREL <max.coquerel@gmail.com>\n"
+"POT-Creation-Date: 2015-08-18 06:33+0000\n"
+"PO-Revision-Date: 2015-08-17 22:45+0000\n"
+"Last-Translator: Lucas Mascaro <mascaro.lucas@yahoo.fr>\n"
 "Language-Team: French (http://www.transifex.com/openstack/oslomessaging/"
 "language/fr/)\n"
 "Language: fr\n"
@@ -21,6 +22,5 @@ msgstr ""
 "Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
-#, python-format
-msgid "An exception occurred processing the API call: %s "
-msgstr "Une exception s'est produite lors de l'appel de API: %s"
+msgid "start/stop/wait must be called in the same thread"
+msgstr "start/stop/wait doivent être appellés dans le même thread "
