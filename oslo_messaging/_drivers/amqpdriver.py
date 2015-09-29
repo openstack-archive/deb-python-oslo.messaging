@@ -76,7 +76,7 @@ class AMQPIncomingMessage(base.IncomingMessage):
         else:
             # TODO(sileht): look at which version of oslo-incubator rpc
             # send need this, but I guess this is older than icehouse
-            # if this is icehouse, we can drop this at M
+            # if this is icehouse, we can drop this at Mitaka
             # if this is havana, we can drop this now.
             conn.direct_send(self.msg_id, rpc_common.serialize_msg(msg))
 
@@ -102,8 +102,8 @@ class AMQPIncomingMessage(base.IncomingMessage):
                 self._send_reply(conn, ending=True)
 
     def acknowledge(self):
-        self.listener.msg_id_cache.add(self.unique_id)
         self.acknowledge_callback()
+        self.listener.msg_id_cache.add(self.unique_id)
 
     def requeue(self):
         # NOTE(sileht): In case of the connection is lost between receiving the

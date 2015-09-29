@@ -1,3 +1,29 @@
+python-oslo.messaging (2.5.0-1ubuntu1) UNRELEASED; urgency=medium
+
+  * Merge from Debian experimental, remaining changes:
+    - d/control: Drop depends on zmq, qpid, aioeventlet and trolluis
+    - d/p/disable-new-executors.patch: Drop hard requirement on new
+      executors.
+
+ -- James Page <james.page@ubuntu.com>  Tue, 29 Sep 2015 09:25:51 +0100
+
+python-oslo.messaging (2.5.0-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+  * python-oslo-messaging transition package in priority extra.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 27 Sep 2015 18:16:47 +0200
+
+python-oslo.messaging (2.1.0-2) experimental; urgency=medium
+
+  * Override dh_auto_clean to make sure it doesn't fetch pbr.
+  * Disable some test which are too fragile (ie: timing issues):
+    - drivers.test_impl_rabbit.TestSendReceive.test_send_receive
+    - drivers.test_impl_rabbit.TestSendReceive.test_send_receive
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 15 Sep 2015 11:27:55 +0200
+
 python-oslo.messaging (2.1.0-1ubuntu1) wily; urgency=medium
 
   * Merge from Debian experimental, remaining changes:

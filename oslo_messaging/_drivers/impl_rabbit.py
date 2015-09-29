@@ -15,7 +15,6 @@
 import collections
 import contextlib
 import functools
-import logging
 import os
 import socket
 import ssl
@@ -28,6 +27,7 @@ import kombu.connection
 import kombu.entity
 import kombu.messaging
 from oslo_config import cfg
+from oslo_log import log as logging
 from oslo_utils import netutils
 import six
 from six.moves.urllib import parse
@@ -40,6 +40,7 @@ from oslo_messaging._i18n import _
 from oslo_messaging._i18n import _LE
 from oslo_messaging._i18n import _LI
 from oslo_messaging._i18n import _LW
+from oslo_messaging import _utils
 from oslo_messaging import exceptions
 
 
@@ -174,12 +175,15 @@ class RabbitMessage(dict):
     def __init__(self, raw_message):
         super(RabbitMessage, self).__init__(
             rpc_common.deserialize_msg(raw_message.payload))
+        LOG.trace('RabbitMessage.Init: message %s', self)
         self._raw_message = raw_message
 
     def acknowledge(self):
+        LOG.trace('RabbitMessage.acknowledge: message %s', self)
         self._raw_message.ack()
 
     def requeue(self):
+        LOG.trace('RabbitMessage.requeue: message %s', self)
         self._raw_message.requeue()
 
 
@@ -220,6 +224,8 @@ class Consumer(object):
             queue_arguments=self.queue_arguments)
 
         try:
+            LOG.trace('ConsumerBase.declare: '
+                      'queue %s', self.queue_name)
             self.queue.declare()
         except conn.connection.channel_errors as exc:
             # NOTE(jrosenboom): This exception may be triggered by a race
@@ -244,6 +250,7 @@ class Consumer(object):
                            nowait=self.nowait)
 
     def cancel(self, tag):
+        LOG.trace('ConsumerBase.cancel: canceling %s', tag)
         self.queue.cancel(six.text_type(tag))
 
     def _callback(self, message):
@@ -259,8 +266,8 @@ class Consumer(object):
         try:
             self.callback(RabbitMessage(message))
         except Exception:
-            LOG.exception(_("Failed to process message"
-                            " ... skipping it."))
+            LOG.exception(_LE("Failed to process message"
+                              " ... skipping it."))
             message.ack()
 
 
@@ -309,7 +316,7 @@ class ConnectionLock(DummyConnectionLock):
         self._monitor = threading.Lock()
         self._workers_locks = threading.Condition(self._monitor)
         self._heartbeat_lock = threading.Condition(self._monitor)
-        self._get_thread_id = self._fetch_current_thread_functor()
+        self._get_thread_id = _utils.fetch_current_thread_functor()
 
     def acquire(self):
         with self._monitor:
@@ -350,25 +357,6 @@ class ConnectionLock(DummyConnectionLock):
             yield
         finally:
             self.release()
-
-    @staticmethod
-    def _fetch_current_thread_functor():
-        # Until https://github.com/eventlet/eventlet/issues/172 is resolved
-        # or addressed we have to use complicated workaround to get a object
-        # that will not be recycled; the usage of threading.current_thread()
-        # doesn't appear to currently be monkey patched and therefore isn't
-        # reliable to use (and breaks badly when used as all threads share
-        # the same current_thread() object)...
-        try:
-            import eventlet
-            from eventlet import patcher
-            green_threaded = patcher.is_monkey_patched('thread')
-        except ImportError:
-            green_threaded = False
-        if green_threaded:
-            return lambda: eventlet.getcurrent()
-        else:
-            return lambda: threading.current_thread()
 
 
 class Connection(object):
@@ -623,7 +611,7 @@ class Connection(object):
             retry = None
 
         def on_error(exc, interval):
-            LOG.debug(_("Received recoverable error from kombu:"),
+            LOG.debug("Received recoverable error from kombu:",
                       exc_info=True)
 
             recoverable_error_callback and recoverable_error_callback(exc)
@@ -655,6 +643,8 @@ class Connection(object):
             # should sufficient, because the underlying kombu transport
             # connection object freed.
             if self.kombu_reconnect_delay > 0:
+                LOG.trace('Delaying reconnect for %1.1f seconds ...',
+                          self.kombu_reconnect_delay)
                 time.sleep(self.kombu_reconnect_delay)
 
         def on_reconnection(new_channel):
@@ -699,7 +689,7 @@ class Connection(object):
             self._set_current_channel(channel)
             return ret
         except recoverable_errors as exc:
-            LOG.debug(_("Received recoverable error from kombu:"),
+            LOG.debug("Received recoverable error from kombu:",
                       exc_info=True)
             error_callback and error_callback(exc)
             self._set_current_channel(None)
@@ -841,8 +831,8 @@ class Connection(object):
 
         def _connect_error(exc):
             log_info = {'topic': consumer.routing_key, 'err_str': exc}
-            LOG.error(_("Failed to declare consumer for topic '%(topic)s': "
-                        "%(err_str)s"), log_info)
+            LOG.error(_LE("Failed to declare consumer for topic '%(topic)s': "
+                          "%(err_str)s"), log_info)
 
         def _declare_consumer():
             consumer.declare(self)
@@ -870,7 +860,7 @@ class Connection(object):
 
         def _error_callback(exc):
             _recoverable_error_callback(exc)
-            LOG.error(_('Failed to consume message from queue: %s'),
+            LOG.error(_LE('Failed to consume message from queue: %s'),
                       exc)
 
         def _consume():
@@ -966,8 +956,8 @@ class Connection(object):
 
         def _error_callback(exc):
             log_info = {'topic': exchange.name, 'err_str': exc}
-            LOG.error(_("Failed to publish message to topic "
-                        "'%(topic)s': %(err_str)s"), log_info)
+            LOG.error(_LE("Failed to publish message to topic "
+                          "'%(topic)s': %(err_str)s"), log_info)
             LOG.debug('Exception', exc_info=exc)
 
         method = functools.partial(method, exchange, msg, routing_key, timeout)
@@ -1000,6 +990,11 @@ class Connection(object):
             # disconnect us, so raise timeout earlier ourself
             transport_timeout = heartbeat_timeout
 
+        log_info = {'msg': msg,
+                    'who': exchange or 'default',
+                    'key': routing_key}
+        LOG.trace('Connection._publish: sending message %(msg)s to'
+                  ' %(who)s with routing key %(key)s', log_info)
         with self._transport_socket_timeout(transport_timeout):
             producer.publish(msg, expiration=expiration)
 
@@ -1036,6 +1031,10 @@ class Connection(object):
                 name=routing_key,
                 routing_key=routing_key,
                 queue_arguments=_get_queue_arguments(self.rabbit_ha_queues))
+            log_info = {'key': routing_key, 'exchange': exchange}
+            LOG.trace(
+                'Connection._publish_and_creates_default_queue: '
+                'declare queue %(key)s on %(exchange)s exchange', log_info)
             queue.declare()
             self.PUBLISHER_DECLARED_QUEUES[self.channel].add(queue_indentifier)
 
