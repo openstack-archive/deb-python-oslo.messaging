@@ -1,16 +1,11 @@
-python-oslo.messaging (2.5.0-2) unstable; urgency=medium
-
-  * Uploading to unstable.
-
- -- Thomas Goirand <zigo@debian.org>  Thu, 15 Oct 2015 20:07:13 +0000
-
-python-oslo.messaging (2.5.0-1) experimental; urgency=medium
+python-oslo.messaging (2.5.0-1) unstable; urgency=medium
 
   * New upstream release.
   * Fixed (build-)depends for this release.
   * python-oslo-messaging transition package in priority extra.
+  * Uploading to unstable.
 
- -- Thomas Goirand <zigo@debian.org>  Sun, 27 Sep 2015 18:16:47 +0200
+ -- Thomas Goirand <zigo@debian.org>  Thu, 15 Oct 2015 20:07:13 +0000
 
 python-oslo.messaging (2.1.0-2) experimental; urgency=medium
 
