@@ -371,16 +371,20 @@ class TestCyrusAuthentication(test_utils.BaseTestCase):
         _t = "echo secret | saslpasswd2 -c -p -f ${db} joe"
         cmd = Template(_t).substitute(db=db)
         try:
-            subprocess.call(args=cmd, shell=True)
+            subprocess.check_call(args=cmd, shell=True)
         except Exception:
             shutil.rmtree(self._conf_dir, ignore_errors=True)
             self._conf_dir = None
-            raise self.SkipTest("Cyrus tool saslpasswd2 not installed")
+            raise self.skip("Cyrus tool saslpasswd2 not installed")
 
         # configure the SASL broker:
         conf = os.path.join(self._conf_dir, 'openstack.conf')
+        # Note: don't add ANONYMOUS or EXTERNAL without updating the
+        # test_authentication_bad_mechs test below
         mechs = "DIGEST-MD5 SCRAM-SHA-1 CRAM-MD5 PLAIN"
         t = Template("""sasldb_path: ${db}
+pwcheck_method: auxprop
+auxprop_plugin: sasldb
 mech_list: ${mechs}
 """)
         with open(conf, 'w') as f:
@@ -391,11 +395,14 @@ mech_list: ${mechs}
                                   sasl_config_dir=self._conf_dir,
                                   sasl_config_name="openstack")
         self._broker.start()
+        self.messaging_conf.transport_driver = 'amqp'
+        self.conf = self.messaging_conf.conf
 
     def tearDown(self):
         super(TestCyrusAuthentication, self).tearDown()
         if self._broker:
             self._broker.stop()
+            self._broker = None
         if self._conf_dir:
             shutil.rmtree(self._conf_dir, ignore_errors=True)
 
@@ -434,6 +441,45 @@ mech_list: ${mechs}
                           {"method": "echo"},
                           wait_for_reply=True,
                           timeout=2.0)
+        driver.cleanup()
+
+    def test_authentication_bad_mechs(self):
+        """Verify that the connection fails if the client's SASL mechanisms do
+        not match the broker's.
+        """
+        self.config(sasl_mechanisms="EXTERNAL ANONYMOUS",
+                    group="oslo_messaging_amqp")
+        addr = "amqp://joe:secret@%s:%d" % (self._broker.host,
+                                            self._broker.port)
+        url = oslo_messaging.TransportURL.parse(self.conf, addr)
+        driver = amqp_driver.ProtonDriver(self.conf, url)
+        target = oslo_messaging.Target(topic="test-topic")
+        _ListenerThread(driver.listen(target), 1)
+        self.assertRaises(oslo_messaging.MessagingTimeout,
+                          driver.send,
+                          target, {"context": True},
+                          {"method": "echo"},
+                          wait_for_reply=True,
+                          timeout=2.0)
+        driver.cleanup()
+
+    def test_authentication_default_username(self):
+        """Verify that a configured username/password is used if none appears
+        in the URL.
+        """
+        addr = "amqp://%s:%d" % (self._broker.host, self._broker.port)
+        self.config(username="joe",
+                    password="secret",
+                    group="oslo_messaging_amqp")
+        url = oslo_messaging.TransportURL.parse(self.conf, addr)
+        driver = amqp_driver.ProtonDriver(self.conf, url)
+        target = oslo_messaging.Target(topic="test-topic")
+        listener = _ListenerThread(driver.listen(target), 1)
+        rc = driver.send(target, {"context": True},
+                         {"method": "echo"}, wait_for_reply=True)
+        self.assertIsNotNone(rc)
+        listener.join(timeout=30)
+        self.assertFalse(listener.isAlive())
         driver.cleanup()
 
 
@@ -546,12 +592,20 @@ class FakeBroker(threading.Thread):
                         self.connection.pn_sasl.server()
                 self.connection.open()
                 self.sender_links = set()
+                self.receiver_links = set()
                 self.closed = False
 
             def destroy(self):
                 """Destroy the test connection."""
-                while self.sender_links:
-                    link = self.sender_links.pop()
+                # destroy modifies the set, so make a copy
+                tmp = self.sender_links.copy()
+                while tmp:
+                    link = tmp.pop()
+                    link.destroy()
+                # destroy modifies the set, so make a copy
+                tmp = self.receiver_links.copy()
+                while tmp:
+                    link = tmp.pop()
                     link.destroy()
                 self.connection.destroy()
                 self.connection = None
@@ -622,16 +676,21 @@ class FakeBroker(threading.Thread):
             """An AMQP sending link."""
             def __init__(self, server, conn, handle, src_addr=None):
                 self.server = server
+                self.conn = conn
                 cnn = conn.connection
                 self.link = cnn.accept_sender(handle,
                                               source_override=src_addr,
                                               event_handler=self)
+                conn.sender_links.add(self)
                 self.link.open()
                 self.routed = False
 
             def destroy(self):
                 """Destroy the link."""
                 self._cleanup()
+                conn = self.conn
+                self.conn = None
+                conn.sender_links.remove(self)
                 if self.link:
                     self.link.destroy()
                     self.link = None
@@ -663,12 +722,23 @@ class FakeBroker(threading.Thread):
             """An AMQP Receiving link."""
             def __init__(self, server, conn, handle, addr=None):
                 self.server = server
+                self.conn = conn
                 cnn = conn.connection
                 self.link = cnn.accept_receiver(handle,
                                                 target_override=addr,
                                                 event_handler=self)
+                conn.receiver_links.add(self)
                 self.link.open()
                 self.link.add_capacity(10)
+
+            def destroy(self):
+                """Destroy the link."""
+                conn = self.conn
+                self.conn = None
+                conn.receiver_links.remove(self)
+                if self.link:
+                    self.link.destroy()
+                    self.link = None
 
             # ReceiverEventHandler callbacks:
 
@@ -676,8 +746,7 @@ class FakeBroker(threading.Thread):
                 self.link.close()
 
             def receiver_closed(self, receiver_link):
-                self.link.destroy()
-                self.link = None
+                self.destroy()
 
             def message_received(self, receiver_link, message, handle):
                 """Forward this message out the proper sending link."""
@@ -736,7 +805,7 @@ class FakeBroker(threading.Thread):
         """Shutdown the server."""
         LOG.debug("Stopping test Broker %s:%d", self.host, self.port)
         self._shutdown = True
-        os.write(self._wakeup_pipe[1], "!")
+        os.write(self._wakeup_pipe[1], b'!')
         self.join()
         LOG.debug("Test Broker %s:%d stopped", self.host, self.port)
 
@@ -802,8 +871,11 @@ class FakeBroker(threading.Thread):
 
         # Shutting down
         self._my_socket.close()
-        for conn in self._connections.itervalues():
+        for conn in self._connections.values():
             conn.destroy()
+        self._connections = None
+        self.container.destroy()
+        self.container = None
         return 0
 
     def add_route(self, address, link):

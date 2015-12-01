@@ -34,7 +34,7 @@ CONF = cfg.CONF
 CONF.register_opt(router_config)
 
 
-class RoutingDriver(notifier._Driver):
+class RoutingDriver(notifier.Driver):
     NOTIFIER_PLUGIN_NAMESPACE = 'oslo.messaging.notify.drivers'
 
     plugin_manager = None
@@ -61,7 +61,7 @@ class RoutingDriver(notifier._Driver):
             return
 
         # Infer which drivers are used from the config file.
-        self.routing_groups = yaml.load(
+        self.routing_groups = yaml.safe_load(
             self._get_notifier_config_file(filename))
         if not self.routing_groups:
             self.routing_groups = {}  # In case we got None from load()

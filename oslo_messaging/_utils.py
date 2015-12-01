@@ -87,7 +87,7 @@ class DispatcherExecutorContext(object):
     def done(self):
         """Callback after the incoming message have been dispathed
 
-        Should be runned in the main executor thread/greenlet/corotine
+        Should be ran in the main executor thread/greenlet/corotine
         """
         # FIXME(sileht): this is not currently true, this works only because
         # the driver connection used for polling write on the wire only to
@@ -114,3 +114,17 @@ def fetch_current_thread_functor():
         return lambda: eventlet.getcurrent()
     else:
         return lambda: threading.current_thread()
+
+
+class DummyLock(object):
+    def acquire(self):
+        pass
+
+    def release(self):
+        pass
+
+    def __enter__(self):
+        self.acquire()
+
+    def __exit__(self, type, value, traceback):
+        self.release()

@@ -91,10 +91,12 @@ class TestHeartbeat(test_utils.BaseTestCase):
 
         if not heartbeat_side_effect:
             self.assertEqual(1, fake_ensure_connection.call_count)
-            self.assertEqual(2, fake_logger.info.call_count)
+            self.assertEqual(2, fake_logger.debug.call_count)
+            self.assertEqual(0, fake_logger.info.call_count)
         else:
             self.assertEqual(2, fake_ensure_connection.call_count)
-            self.assertEqual(3, fake_logger.info.call_count)
+            self.assertEqual(2, fake_logger.debug.call_count)
+            self.assertEqual(1, fake_logger.info.call_count)
             self.assertIn(mock.call(info, mock.ANY),
                           fake_logger.info.mock_calls)
 
@@ -222,7 +224,7 @@ class TestRabbitPublisher(test_utils.BaseTestCase):
             try_send(e_passive)
 
             with mock.patch('kombu.messaging.Producer', side_effect=exc):
-                # Shoud reset the cache and ensures the exchange does
+                # Should reset the cache and ensures the exchange does
                 # not exists
                 self.assertRaises(exc, try_send, e_passive)
             # Recreate it
@@ -473,7 +475,7 @@ class TestSendReceive(test_utils.BaseTestCase):
         if self.reply_failure_404:
             # NOTE(sileht) all reply fail, first take
             # kombu_reconnect_timeout seconds to fail
-            # next immediatly fail
+            # next immediately fail
             dt = time.time() - start
             timeout = self.conf.oslo_messaging_rabbit.kombu_reconnect_timeout
             self.assertTrue(timeout <= dt < (timeout + 0.100), dt)

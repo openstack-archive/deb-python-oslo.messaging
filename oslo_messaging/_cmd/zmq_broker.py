@@ -1,6 +1,4 @@
-#!/usr/bin/env python
-
-#    Copyright 2011 OpenStack Foundation
+#    Copyright 2015 Mirantis, Inc.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -14,27 +12,31 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import eventlet
-eventlet.monkey_patch()
-
 import contextlib
+import logging
 import sys
 
 from oslo_config import cfg
-from oslo_log import log
 
 from oslo_messaging._drivers import impl_zmq
-from oslo_messaging._executors import base  # FIXME(markmc)
+from oslo_messaging._drivers.zmq_driver.broker import zmq_broker
+from oslo_messaging._executors import impl_pooledexecutor
 
 CONF = cfg.CONF
 CONF.register_opts(impl_zmq.zmq_opts)
-CONF.register_opts(base._pool_opts)
+CONF.register_opts(impl_pooledexecutor._pool_opts)
+# TODO(ozamiatin): Move this option assignment to an external config file
+# Use efficient zmq poller in real-world deployment
+CONF.rpc_zmq_native = True
 
 
 def main():
     CONF(sys.argv[1:], project='oslo')
-    log.setup(CONF, 'oslo.messaging')
+    logging.basicConfig(level=logging.DEBUG)
 
-    with contextlib.closing(impl_zmq.ZmqProxy(CONF)) as reactor:
-        reactor.consume_in_thread()
+    with contextlib.closing(zmq_broker.ZmqBroker(CONF)) as reactor:
+        reactor.start()
         reactor.wait()
+
+if __name__ == "__main__":
+    main()

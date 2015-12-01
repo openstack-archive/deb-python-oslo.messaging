@@ -16,6 +16,7 @@ import collections
 import contextlib
 import functools
 import os
+import random
 import socket
 import ssl
 import threading
@@ -271,21 +272,9 @@ class Consumer(object):
             message.ack()
 
 
-class DummyConnectionLock(object):
-    def acquire(self):
-        pass
-
-    def release(self):
-        pass
-
+class DummyConnectionLock(_utils.DummyLock):
     def heartbeat_acquire(self):
         pass
-
-    def __enter__(self):
-        self.acquire()
-
-    def __exit__(self, type, value, traceback):
-        self.release()
 
 
 class ConnectionLock(DummyConnectionLock):
@@ -418,6 +407,8 @@ class Connection(object):
                 LOG.warn(_LW('Selecting the kombu transport through the '
                              'transport url (%s) is a experimental feature '
                              'and this is not yet supported.') % url.transport)
+            if len(url.hosts) > 1:
+                random.shuffle(url.hosts)
             for host in url.hosts:
                 transport = url.transport.replace('kombu+', '')
                 transport = transport.replace('rabbit', 'amqp')
@@ -435,6 +426,8 @@ class Connection(object):
             transport = url.transport.replace('kombu+', '')
             self._url = "%s://%s" % (transport, virtual_host)
         else:
+            if len(self.rabbit_hosts) > 1:
+                random.shuffle(self.rabbit_hosts)
             for adr in self.rabbit_hosts:
                 hostname, port = netutils.parse_host_port(
                     adr, default_port=self.rabbit_port)
@@ -472,14 +465,14 @@ class Connection(object):
             },
         )
 
-        LOG.info(_LI('Connecting to AMQP server on %(hostname)s:%(port)s'),
-                 self.connection.info())
+        LOG.debug('Connecting to AMQP server on %(hostname)s:%(port)s',
+                  self.connection.info())
 
         # NOTE(sileht): kombu recommend to run heartbeat_check every
         # seconds, but we use a lock around the kombu connection
         # so, to not lock to much this lock to most of the time do nothing
         # expected waiting the events drain, we start heartbeat_check and
-        # retreive the server heartbeat packet only two times more than
+        # retrieve the server heartbeat packet only two times more than
         # the minimum required for the heartbeat works
         # (heatbeat_timeout/heartbeat_rate/2.0, default kombu
         # heartbeat_rate is 2)
@@ -498,10 +491,10 @@ class Connection(object):
         if purpose == rpc_amqp.PURPOSE_SEND:
             self._heartbeat_start()
 
-        LOG.info(_LI('Connected to AMQP server on %(hostname)s:%(port)s'),
-                 self.connection.info())
+        LOG.debug('Connected to AMQP server on %(hostname)s:%(port)s',
+                  self.connection.info())
 
-        # NOTE(sileht): value choosen according the best practice from kombu
+        # NOTE(sileht): value chosen according the best practice from kombu
         # http://kombu.readthedocs.org/en/latest/reference/kombu.common.html#kombu.common.eventloop
         # For heatbeat, we can set a bigger timeout, and check we receive the
         # heartbeat packets regulary
@@ -864,7 +857,7 @@ class Connection(object):
                       exc)
 
         def _consume():
-            # NOTE(sileht): in case the acknowledgement or requeue of a
+            # NOTE(sileht): in case the acknowledgment or requeue of a
             # message fail, the kombu transport can be disconnected
             # In this case, we must redeclare our consumers, so raise
             # a recoverable error to trigger the reconnection code.
@@ -1085,7 +1078,7 @@ class Connection(object):
                 elif exc.code == 404:
                     msg = _("The exchange %(exchange)s to send to "
                             "%(routing_key)s still doesn't exist after "
-                            "%(duration)s sec abandonning...") % {
+                            "%(duration)s sec abandoning...") % {
                                 'duration': duration,
                                 'exchange': exchange.name,
                                 'routing_key': routing_key}

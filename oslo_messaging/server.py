@@ -23,17 +23,24 @@ __all__ = [
     'ServerListenError',
 ]
 
+import functools
+import inspect
 import logging
+import threading
+import traceback
 
 from oslo_service import service
+from oslo_utils import timeutils
 from stevedore import driver
 
 from oslo_messaging._drivers import base as driver_base
-from oslo_messaging._i18n import _LW
-from oslo_messaging import _utils
 from oslo_messaging import exceptions
 
 LOG = logging.getLogger(__name__)
+
+# The default number of seconds of waiting after which we will emit a log
+# message
+DEFAULT_LOG_AFTER = 30
 
 
 class MessagingServerError(exceptions.MessagingException):
@@ -60,7 +67,223 @@ class ServerListenError(MessagingServerError):
         self.ex = ex
 
 
-class MessageHandlingServer(service.ServiceBase):
+class TaskTimeout(MessagingServerError):
+    """Raised if we timed out waiting for a task to complete."""
+
+
+class _OrderedTask(object):
+    """A task which must be executed in a particular order.
+
+    A caller may wait for this task to complete by calling
+    `wait_for_completion`.
+
+    A caller may run this task with `run_once`, which will ensure that however
+    many times the task is called it only runs once. Simultaneous callers will
+    block until the running task completes, which means that any caller can be
+    sure that the task has completed after run_once returns.
+    """
+
+    INIT = 0      # The task has not yet started
+    RUNNING = 1   # The task is running somewhere
+    COMPLETE = 2  # The task has run somewhere
+
+    def __init__(self, name):
+        """Create a new _OrderedTask.
+
+        :param name: The name of this task. Used in log messages.
+        """
+        super(_OrderedTask, self).__init__()
+
+        self._name = name
+        self._cond = threading.Condition()
+        self._state = self.INIT
+
+    def _wait(self, condition, msg, log_after, timeout_timer):
+        """Wait while condition() is true. Write a log message if condition()
+        has not become false within `log_after` seconds. Raise TaskTimeout if
+        timeout_timer expires while waiting.
+        """
+
+        log_timer = None
+        if log_after != 0:
+            log_timer = timeutils.StopWatch(duration=log_after)
+            log_timer.start()
+
+        while condition():
+            if log_timer is not None and log_timer.expired():
+                LOG.warn('Possible hang: %s' % msg)
+                LOG.debug(''.join(traceback.format_stack()))
+                # Only log once. After than we wait indefinitely without
+                # logging.
+                log_timer = None
+
+            if timeout_timer is not None and timeout_timer.expired():
+                raise TaskTimeout(msg)
+
+            timeouts = []
+            if log_timer is not None:
+                timeouts.append(log_timer.leftover())
+            if timeout_timer is not None:
+                timeouts.append(timeout_timer.leftover())
+
+            wait = None
+            if timeouts:
+                wait = min(timeouts)
+            self._cond.wait(wait)
+
+    @property
+    def complete(self):
+        return self._state == self.COMPLETE
+
+    def wait_for_completion(self, caller, log_after, timeout_timer):
+        """Wait until this task has completed.
+
+        :param caller: The name of the task which is waiting.
+        :param log_after: Emit a log message if waiting longer than `log_after`
+                          seconds.
+        :param timeout_timer: Raise TaskTimeout if StopWatch object
+                              `timeout_timer` expires while waiting.
+        """
+        with self._cond:
+            msg = '%s is waiting for %s to complete' % (caller, self._name)
+            self._wait(lambda: not self.complete,
+                       msg, log_after, timeout_timer)
+
+    def run_once(self, fn, log_after, timeout_timer):
+        """Run a task exactly once. If it is currently running in another
+        thread, wait for it to complete. If it has already run, return
+        immediately without running it again.
+
+        :param fn: The task to run. It must be a callable taking no arguments.
+                   It may optionally return another callable, which also takes
+                   no arguments, which will be executed after completion has
+                   been signaled to other threads.
+        :param log_after: Emit a log message if waiting longer than `log_after`
+                          seconds.
+        :param timeout_timer: Raise TaskTimeout if StopWatch object
+                              `timeout_timer` expires while waiting.
+        """
+        with self._cond:
+            if self._state == self.INIT:
+                self._state = self.RUNNING
+                # Note that nothing waits on RUNNING, so no need to notify
+
+                # We need to release the condition lock before calling out to
+                # prevent deadlocks. Reacquire it immediately afterwards.
+                self._cond.release()
+                try:
+                    post_fn = fn()
+                finally:
+                    self._cond.acquire()
+                    self._state = self.COMPLETE
+                    self._cond.notify_all()
+
+                if post_fn is not None:
+                    # Release the condition lock before calling out to prevent
+                    # deadlocks. Reacquire it immediately afterwards.
+                    self._cond.release()
+                    try:
+                        post_fn()
+                    finally:
+                        self._cond.acquire()
+            elif self._state == self.RUNNING:
+                msg = ('%s is waiting for another thread to complete'
+                       % self._name)
+                self._wait(lambda: self._state == self.RUNNING,
+                           msg, log_after, timeout_timer)
+
+
+class _OrderedTaskRunner(object):
+    """Mixin for a class which executes ordered tasks."""
+
+    def __init__(self, *args, **kwargs):
+        super(_OrderedTaskRunner, self).__init__(*args, **kwargs)
+
+        # Get a list of methods on this object which have the _ordered
+        # attribute
+        self._tasks = [name
+                       for (name, member) in inspect.getmembers(self)
+                       if inspect.ismethod(member) and
+                       getattr(member, '_ordered', False)]
+        self.reset_states()
+
+        self._reset_lock = threading.Lock()
+
+    def reset_states(self):
+        # Create new task states for tasks in reset
+        self._states = {task: _OrderedTask(task) for task in self._tasks}
+
+    @staticmethod
+    def decorate_ordered(fn, state, after, reset_after):
+
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            # If the reset_after state has already completed, reset state so
+            # we can run again.
+            # NOTE(mdbooth): This is ugly and requires external locking to be
+            # deterministic when using multiple threads. Consider a thread that
+            # does: server.stop(), server.wait(). If another thread causes a
+            # reset between stop() and wait(), this will not have the intended
+            # behaviour. It is safe without external locking, if the caller
+            # instantiates a new object.
+            with self._reset_lock:
+                if (reset_after is not None and
+                        self._states[reset_after].complete):
+                    self.reset_states()
+
+            # Store the states we started with in case the state wraps on us
+            # while we're sleeping. We must wait and run_once in the same
+            # epoch. If the epoch ended while we were sleeping, run_once will
+            # safely do nothing.
+            states = self._states
+
+            log_after = kwargs.pop('log_after', DEFAULT_LOG_AFTER)
+            timeout = kwargs.pop('timeout', None)
+
+            timeout_timer = None
+            if timeout is not None:
+                timeout_timer = timeutils.StopWatch(duration=timeout)
+                timeout_timer.start()
+
+            # Wait for the given preceding state to complete
+            if after is not None:
+                states[after].wait_for_completion(state,
+                                                  log_after, timeout_timer)
+
+            # Run this state
+            states[state].run_once(lambda: fn(self, *args, **kwargs),
+                                   log_after, timeout_timer)
+        return wrapper
+
+
+def ordered(after=None, reset_after=None):
+    """A method which will be executed as an ordered task. The method will be
+    called exactly once, however many times it is called. If it is called
+    multiple times simultaneously it will only be called once, but all callers
+    will wait until execution is complete.
+
+    If `after` is given, this method will not run until `after` has completed.
+
+    If `reset_after` is given and the target method has completed, allow this
+    task to run again by resetting all task states.
+
+    :param after: Optionally, the name of another `ordered` method. Wait for
+                  the completion of `after` before executing this method.
+    :param reset_after: Optionally, the name of another `ordered` method. Reset
+                        all states when calling this method if `reset_after`
+                        has completed.
+    """
+    def _ordered(fn):
+        # Set an attribute on the method so we can find it later
+        setattr(fn, '_ordered', True)
+        state = fn.__name__
+
+        return _OrderedTaskRunner.decorate_ordered(fn, state, after,
+                                                   reset_after)
+    return _ordered
+
+
+class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
     """Server for handling messages.
 
     Connect a transport to a dispatcher that knows how to process the
@@ -92,21 +315,20 @@ class MessageHandlingServer(service.ServiceBase):
         self.dispatcher = dispatcher
         self.executor = executor
 
-        self._get_thread_id = _utils.fetch_current_thread_functor()
-
         try:
             mgr = driver.DriverManager('oslo.messaging.executors',
                                        self.executor)
         except RuntimeError as ex:
             raise ExecutorLoadFailure(self.executor, ex)
-        else:
-            self._executor_cls = mgr.driver
-            self._executor = None
-            self._running = False
-            self._thread_id = None
+
+        self._executor_cls = mgr.driver
+        self._executor_obj = None
+
+        self._started = False
 
         super(MessageHandlingServer, self).__init__()
 
+    @ordered(reset_after='stop')
     def start(self):
         """Start handling incoming messages.
 
@@ -120,31 +342,39 @@ class MessageHandlingServer(service.ServiceBase):
         registering a callback with an event loop. Similarly, the executor may
         choose to dispatch messages in a new thread, coroutine or simply the
         current thread.
-        """
-        self._check_same_thread_id()
 
-        if self._executor is not None:
-            return
+        :param log_after: Emit a log message if waiting longer than `log_after`
+                          seconds to run this task. If set to zero, no log
+                          message will be emitted.  Defaults to 30 seconds.
+        :type log_after: int
+        :param timeout: Raise `TaskTimeout` if the task has to wait longer than
+                        `timeout` seconds before executing.
+        :type timeout: int
+        """
+        # Warn that restarting will be deprecated
+        if self._started:
+            LOG.warn('Restarting a MessageHandlingServer is inherently racy. '
+                     'It is deprecated, and will become a noop in a future '
+                     'release of oslo.messaging. If you need to restart '
+                     'MessageHandlingServer you should instantiate a new '
+                     'object.')
+        self._started = True
+
         try:
             listener = self.dispatcher._listen(self.transport)
         except driver_base.TransportDriverError as ex:
             raise ServerListenError(self.target, ex)
+        executor = self._executor_cls(self.conf, listener, self.dispatcher)
+        executor.start()
+        self._executor_obj = executor
 
-        self._running = True
-        self._executor = self._executor_cls(self.conf, listener,
-                                            self.dispatcher)
-        self._executor.start()
+        if self.executor == 'blocking':
+            # N.B. This will be executed unlocked and unordered, so
+            # we can't rely on the value of self._executor_obj when this runs.
+            # We explicitly pass the local variable.
+            return lambda: executor.execute()
 
-    def _check_same_thread_id(self):
-        if self._thread_id is None:
-            self._thread_id = self._get_thread_id()
-        elif self._thread_id != self._get_thread_id():
-            # NOTE(dims): Need to change this to raise RuntimeError after
-            # verifying/fixing other openstack projects (like Neutron)
-            # work ok with this change
-            LOG.warn(_LW("start/stop/wait must be called in the "
-                         "same thread"))
-
+    @ordered(after='start')
     def stop(self):
         """Stop handling incoming messages.
 
@@ -152,42 +382,42 @@ class MessageHandlingServer(service.ServiceBase):
         the server. However, the server may still be in the process of handling
         some messages, and underlying driver resources associated to this
         server are still in use. See 'wait' for more details.
+
+        :param log_after: Emit a log message if waiting longer than `log_after`
+                          seconds to run this task. If set to zero, no log
+                          message will be emitted.  Defaults to 30 seconds.
+        :type log_after: int
+        :param timeout: Raise `TaskTimeout` if the task has to wait longer than
+                        `timeout` seconds before executing.
+        :type timeout: int
         """
-        self._check_same_thread_id()
+        self._executor_obj.stop()
 
-        if self._executor is not None:
-            self._running = False
-            self._executor.stop()
-
+    @ordered(after='stop')
     def wait(self):
         """Wait for message processing to complete.
 
-        After calling stop(), there may still be some some existing messages
+        After calling stop(), there may still be some existing messages
         which have not been completely processed. The wait() method blocks
         until all message processing has completed.
 
         Once it's finished, the underlying driver resources associated to this
         server are released (like closing useless network connections).
+
+        :param log_after: Emit a log message if waiting longer than `log_after`
+                          seconds to run this task. If set to zero, no log
+                          message will be emitted.  Defaults to 30 seconds.
+        :type log_after: int
+        :param timeout: Raise `TaskTimeout` if the task has to wait longer than
+                        `timeout` seconds before executing.
+        :type timeout: int
         """
-        self._check_same_thread_id()
-
-        if self._running:
-            # NOTE(dims): Need to change this to raise RuntimeError after
-            # verifying/fixing other openstack projects (like Neutron)
-            # work ok with this change
-            LOG.warn(_LW("wait() should be called after stop() as it "
-                         "waits for existing messages to finish "
-                         "processing"))
-
-        if self._executor is not None:
-            self._executor.wait()
+        try:
+            self._executor_obj.wait()
+        finally:
             # Close listener connection after processing all messages
-            self._executor.listener.cleanup()
-
-        self._executor = None
-        # NOTE(sileht): executor/listener have been properly stopped
-        # allow to restart it into another thread
-        self._thread_id = None
+            self._executor_obj.listener.cleanup()
+            self._executor_obj = None
 
     def reset(self):
         """Reset service.

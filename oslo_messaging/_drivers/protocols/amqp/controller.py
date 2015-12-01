@@ -72,6 +72,10 @@ class Replies(pyngus.ReceiverEventHandler):
         self._credit = 0
         self._receiver.open()
 
+    def destroy(self):
+        self._correlation = None
+        self._receiver = None
+
     def ready(self):
         return self._ready
 
@@ -157,6 +161,7 @@ class Server(pyngus.ReceiverEventHandler):
         self._incoming = incoming
         self._addresses = addresses
         self._capacity = 500   # credit per link
+        self._receivers = None
 
     def attach(self, connection):
         """Create receiver links over the given connection for all the
@@ -179,6 +184,9 @@ class Server(pyngus.ReceiverEventHandler):
             r.add_capacity(self._capacity)
             r.open()
             self._receivers.append(r)
+
+    def destroy(self):
+        self._receivers = None
 
     # Pyngus ReceiverLink event callbacks:
 
@@ -206,23 +214,26 @@ class Server(pyngus.ReceiverEventHandler):
 
 class Hosts(object):
     """An order list of TransportHost addresses. Connection failover
-    progresses from one host to the next.
+    progresses from one host to the next.  username and password come from the
+    configuration and are used only if no username/password was given in the
+    URL.
     """
-    def __init__(self, entries=None):
-        self._entries = entries[:] if entries else []
+    def __init__(self, entries=None, default_username=None,
+                 default_password=None):
+        if entries:
+            self._entries = entries[:]
+        else:
+            self._entries = [transport.TransportHost(hostname="localhost",
+                                                     port=5672)]
         for entry in self._entries:
             entry.port = entry.port or 5672
+            entry.username = entry.username or default_username
+            entry.password = entry.password or default_password
         self._current = 0
-
-    def add(self, transport_host):
-        self._entries.append(transport_host)
 
     @property
     def current(self):
-        if len(self._entries):
-            return self._entries[self._current]
-        else:
-            return transport.TransportHost(hostname="localhost", port=5672)
+        return self._entries[self._current]
 
     def next(self):
         if len(self._entries) > 1:
@@ -245,6 +256,7 @@ class Controller(pyngus.ConnectionEventHandler):
     """
     def __init__(self, hosts, default_exchange, config):
         self.processor = None
+        self._socket_connection = None
         # queue of Task() objects to execute on the eventloop once the
         # connection is ready:
         self._tasks = moves.queue.Queue(maxsize=500)
@@ -256,7 +268,6 @@ class Controller(pyngus.ConnectionEventHandler):
         self._senders = {}
         # Servers (set of receiving links), indexed by target:
         self._servers = {}
-        self.hosts = Hosts(hosts)
 
         opt_group = cfg.OptGroup(name='oslo_messaging_amqp',
                                  title='AMQP 1.0 driver options')
@@ -277,6 +288,11 @@ class Controller(pyngus.ConnectionEventHandler):
         self.ssl_key_password = config.oslo_messaging_amqp.ssl_key_password
         self.ssl_allow_insecure = \
             config.oslo_messaging_amqp.allow_insecure_clients
+        self.sasl_mechanisms = config.oslo_messaging_amqp.sasl_mechanisms
+        self.sasl_config_dir = config.oslo_messaging_amqp.sasl_config_dir
+        self.sasl_config_name = config.oslo_messaging_amqp.sasl_config_name
+        self.hosts = Hosts(hosts, config.oslo_messaging_amqp.username,
+                           config.oslo_messaging_amqp.password)
         self.separator = "."
         self.fanout_qualifier = "all"
         self.default_exchange = default_exchange
@@ -310,6 +326,15 @@ class Controller(pyngus.ConnectionEventHandler):
             LOG.debug("Waiting for eventloop to exit")
             self.processor.shutdown(wait, timeout)
             self.processor = None
+        self._tasks = None
+        self._senders = None
+        for server in self._servers.values():
+            server.destroy()
+        self._servers.clear()
+        self._socket_connection = None
+        if self._replies:
+            self._replies.destroy()
+            self._replies = None
         LOG.debug("Eventloop exited, driver shut down")
 
     # The remaining methods are reserved to run from the eventloop thread only!
@@ -435,7 +460,7 @@ class Controller(pyngus.ConnectionEventHandler):
     def _do_connect(self):
         """Establish connection and reply subscription on processor thread."""
         host = self.hosts.current
-        conn_props = {}
+        conn_props = {'hostname': host.hostname}
         if self.idle_timeout:
             conn_props["idle-time-out"] = float(self.idle_timeout)
         if self.trace_protocol:
@@ -451,6 +476,14 @@ class Controller(pyngus.ConnectionEventHandler):
                                             self.ssl_key_file,
                                             self.ssl_key_password)
             conn_props["x-ssl-allow-cleartext"] = self.ssl_allow_insecure
+        # SASL configuration:
+        if self.sasl_mechanisms:
+            conn_props["x-sasl-mechs"] = self.sasl_mechanisms
+        if self.sasl_config_dir:
+            conn_props["x-sasl-config-dir"] = self.sasl_config_dir
+        if self.sasl_config_name:
+            conn_props["x-sasl-config-name"] = self.sasl_config_name
+
         self._socket_connection = self.processor.connect(host,
                                                          handler=self,
                                                          properties=conn_props)
@@ -545,7 +578,7 @@ class Controller(pyngus.ConnectionEventHandler):
         """
         LOG.debug("Connection active (%s:%i), subscribing...",
                   self.hosts.current.hostname, self.hosts.current.port)
-        for s in self._servers.itervalues():
+        for s in self._servers.values():
             s.attach(self._socket_connection.connection)
         self._replies = Replies(self._socket_connection.connection,
                                 lambda: self._reply_link_ready())
@@ -608,10 +641,12 @@ class Controller(pyngus.ConnectionEventHandler):
             if not self._reconnecting:
                 self._reconnecting = True
                 self._replies = None
-                d = self._delay
-                LOG.info("delaying reconnect attempt for %d seconds", d)
-                self.processor.schedule(lambda: self._do_reconnect(), d)
-                self._delay = 1 if self._delay == 0 else min(d * 2, 60)
+                LOG.info("delaying reconnect attempt for %d seconds",
+                         self._delay)
+                self.processor.schedule(lambda: self._do_reconnect(),
+                                        self._delay)
+                self._delay = (1 if self._delay == 0
+                               else min(self._delay * 2, 60))
 
     def _do_reconnect(self):
         """Invoked on connection/socket failure, failover and re-connect to the

@@ -29,7 +29,7 @@ import yaml
 
 import oslo_messaging
 from oslo_messaging.notify import _impl_log
-from oslo_messaging.notify import _impl_messaging
+from oslo_messaging.notify import messaging
 from oslo_messaging.notify import _impl_test
 from oslo_messaging.notify import notifier as msg_notifier
 from oslo_messaging import serializer as msg_serializer
@@ -145,7 +145,7 @@ class TestMessagingNotifier(test_utils.BaseTestCase):
         super(TestMessagingNotifier, self).setUp()
 
         self.logger = self.useFixture(_ReRaiseLoggedExceptionsFixture()).logger
-        self.stubs.Set(_impl_messaging, 'LOG', self.logger)
+        self.stubs.Set(messaging, 'LOG', self.logger)
         self.stubs.Set(msg_notifier, '_LOG', self.logger)
 
     @mock.patch('oslo_utils.timeutils.utcnow')
@@ -412,7 +412,7 @@ group_1:
           - blah.zoo.*
           - zip
         """
-        groups = yaml.load(config)
+        groups = yaml.safe_load(config)
         group = groups['group_1']
 
         # No matching event ...
@@ -443,7 +443,7 @@ group_1:
           - info
           - error
         """
-        groups = yaml.load(config)
+        groups = yaml.safe_load(config)
         group = groups['group_1']
 
         # No matching priority
@@ -476,7 +476,7 @@ group_1:
       accepted_events:
           - foo.*
         """
-        groups = yaml.load(config)
+        groups = yaml.safe_load(config)
         group = groups['group_1']
 
         # Valid event, but no matching priority
