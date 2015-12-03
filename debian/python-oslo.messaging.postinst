@@ -3,7 +3,7 @@
 set -e
 
 if [ "$1" = "configure" ] ; then
-	update-alternatives --install /usr/bin/oslo-messaging-zmq-receiver oslo-messaging-zmq-receiver /usr/bin/python2-oslo-messaging-zmq-receiver 300
+	update-alternatives --install /usr/bin/oslo-messaging-zmq-broker oslo-messaging-zmq-broker /usr/bin/python2-oslo-messaging-zmq-broker 300
 fi
 
 #DEBHELPER#

@@ -3,6 +3,8 @@ python-oslo.messaging (3.0.0-1) experimental; urgency=medium
   * New upstream release.
   * Fixed (build-)depends for this release.
   * Removed do-not-run-toplevel-test.patch.
+  * Upstream has renamed oslo-messaging-zmq-receiver into
+    oslo-messaging-zmq-broker, fixing the package to follow on.
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 01 Dec 2015 12:08:25 +0100
 

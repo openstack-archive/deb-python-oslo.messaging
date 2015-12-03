@@ -4,6 +4,7 @@ set -e
 
 if [ "$1" = "remove" ] || [ "$1" = "disappear" ] ; then
 	update-alternatives --remove oslo-messaging-zmq-receiver /usr/bin/python2-oslo-messaging-zmq-receiver
+	update-alternatives --remove oslo-messaging-zmq-broker /usr/bin/python2-oslo-messaging-zmq-broker
 fi
 
 #DEBHELPER#
