@@ -1,3 +1,10 @@
+python-oslo.messaging (3.0.0-2) UNRELEASED; urgency=medium
+
+  * d/control: Set minimum kombu version to 3.0.30 due to:
+    https://github.com/celery/kombu/issues/545.
+
+ -- Corey Bryant <corey.bryant@canonical.com>  Mon, 14 Dec 2015 15:38:22 -0500
+
 python-oslo.messaging (3.0.0-1) experimental; urgency=medium
 
   * New upstream release.
