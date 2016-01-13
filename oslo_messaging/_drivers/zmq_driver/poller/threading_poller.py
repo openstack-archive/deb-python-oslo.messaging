@@ -38,6 +38,7 @@ class ThreadingPoller(zmq_poller.ZmqPoller):
         self.recv_methods = {}
 
     def register(self, socket, recv_method=None):
+        LOG.debug("Registering socket")
         if socket in self.recv_methods:
             return
         if recv_method is not None:
@@ -91,3 +92,6 @@ class ThreadingExecutor(zmq_poller.Executor):
 
     def wait(self):
         self.thread.join()
+
+    def done(self):
+        self._stop.set()

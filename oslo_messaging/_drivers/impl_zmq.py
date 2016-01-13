@@ -13,7 +13,7 @@
 #    under the License.
 
 import logging
-import pprint
+import os
 import socket
 import threading
 
@@ -24,10 +24,11 @@ from oslo_messaging._drivers import base
 from oslo_messaging._drivers import common as rpc_common
 from oslo_messaging._drivers.zmq_driver.client import zmq_client
 from oslo_messaging._drivers.zmq_driver.server import zmq_server
-from oslo_messaging._executors import impl_pooledexecutor  # FIXME(markmc)
+from oslo_messaging._drivers.zmq_driver import zmq_async
+from oslo_messaging._executors import impl_pooledexecutor
+from oslo_messaging._i18n import _LE
 
 
-pformat = pprint.pformat
 LOG = logging.getLogger(__name__)
 RPCException = rpc_common.RPCException
 
@@ -38,16 +39,8 @@ zmq_opts = [
                     'The "host" option should point or resolve to this '
                     'address.'),
 
-    # The module.Class to use for matchmaking.
-    cfg.StrOpt(
-        'rpc_zmq_matchmaker',
-        default='redis',
-        help='MatchMaker driver.',
-    ),
-
-    cfg.BoolOpt('rpc_zmq_all_req_rep',
-                default=True,
-                help='Use REQ/REP pattern for all methods CALL/CAST/FANOUT.'),
+    cfg.StrOpt('rpc_zmq_matchmaker', default='redis',
+               help='MatchMaker driver.'),
 
     cfg.StrOpt('rpc_zmq_concurrency', default='eventlet',
                help='Type of concurrency used. Either "native" or "eventlet"'),
@@ -67,25 +60,29 @@ zmq_opts = [
                help='Name of this node. Must be a valid hostname, FQDN, or '
                     'IP address. Must match "host" option, if running Nova.'),
 
-    cfg.IntOpt('rpc_cast_timeout',
-               default=30,
+    cfg.IntOpt('rpc_cast_timeout', default=30,
                help='Seconds to wait before a cast expires (TTL). '
                     'Only supported by impl_zmq.'),
 
-    cfg.IntOpt('rpc_poll_timeout',
-               default=1,
+    cfg.IntOpt('rpc_poll_timeout', default=1,
                help='The default number of seconds that poll should wait. '
                     'Poll raises timeout exception when timeout expired.'),
 
-    cfg.BoolOpt('zmq_use_broker',
-                default=True,
-                help='Shows whether zmq-messaging uses broker or not.'),
+    cfg.BoolOpt('direct_over_proxy', default=True,
+                help='Configures zmq-messaging to use proxy with '
+                     'non PUB/SUB patterns.'),
 
-    cfg.IntOpt('rpc_zmq_min_port',
-               default=49152,
-               help='Minimal port number for random ports range.'),
+    cfg.BoolOpt('use_pub_sub', default=True,
+                help='Use PUB/SUB pattern for fanout methods. '
+                     'PUB/SUB always uses proxy.'),
+
+    cfg.PortOpt('rpc_zmq_min_port',
+                default=49152,
+                help='Minimal port number for random ports range.'),
 
     cfg.IntOpt('rpc_zmq_max_port',
+               min=1,
+               max=65536,
                default=65536,
                help='Maximal port number for random ports range.'),
 
@@ -104,6 +101,7 @@ class LazyDriverItem(object):
         self.item_class = item_cls
         self.args = args
         self.kwargs = kwargs
+        self.process_id = os.getpid()
 
     def get(self):
         #  NOTE(ozamiatin): Lazy initialization.
@@ -112,11 +110,12 @@ class LazyDriverItem(object):
         # __init__, but 'fork' extensively used by services
         #  breaks all things.
 
-        if self.item is not None:
+        if self.item is not None and os.getpid() == self.process_id:
             return self.item
 
         self._lock.acquire()
-        if self.item is None:
+        if self.item is None or os.getpid() != self.process_id:
+            self.process_id = os.getpid()
             self.item = self.item_class(*self.args, **self.kwargs)
         self._lock.release()
         return self.item
@@ -156,6 +155,10 @@ class ZmqDriver(base.BaseDriver):
         :param allowed_remote_exmods: remote exception passing options
         :type allowed_remote_exmods: list
         """
+        zmq = zmq_async.import_zmq()
+        if zmq is None:
+            raise ImportError(_LE("ZeroMQ is not available!"))
+
         conf.register_opts(zmq_opts)
         conf.register_opts(impl_pooledexecutor._pool_opts)
         conf.register_opts(base.base_opts)
