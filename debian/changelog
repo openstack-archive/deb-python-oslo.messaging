@@ -7,6 +7,7 @@ python-oslo.messaging (4.0.0-1) experimental; urgency=medium
   [ Thomas Goirand ]
   * New upstream release.
   * Fixed (build-)depends for this release.
+  * Removed MANIFEST.in patches.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 13 Jan 2016 02:43:30 +0000
 
