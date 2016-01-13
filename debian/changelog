@@ -8,6 +8,7 @@ python-oslo.messaging (4.0.0-1) experimental; urgency=medium
   * New upstream release.
   * Fixed (build-)depends for this release.
   * Removed MANIFEST.in patches.
+  * Run Python 3 tests in python 3.5 as well.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 13 Jan 2016 02:43:30 +0000
 
