@@ -85,8 +85,8 @@ Build-Depends-Indep: bandit,
                      subunit,
                      testrepository,
 Standards-Version: 3.9.6
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/python-oslo.messaging.git
-Vcs-Git: http://anonscm.debian.org/git/openstack/python-oslo.messaging.git
+Vcs-Browser: https://anonscm.debian.org/cgit/openstack/python-oslo.messaging.git/
+Vcs-Git: https://anonscm.debian.org/git/openstack/python-oslo.messaging.git
 Homepage: https://github.com/openstack/oslo.messaging
 
 Package: python-oslo.messaging
