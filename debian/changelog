@@ -8,6 +8,7 @@ python-oslo.messaging (4.5.0-1) experimental; urgency=medium
   * Fixed (build-)depends for this release.
   * Fixed debian/copyright order.
   * Standards-Version: 3.9.7 (no change).
+  * Added remove-git-log-call-in-sphinx-doc.patch.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 02 Mar 2016 12:59:50 +0000
 
