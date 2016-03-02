@@ -19,11 +19,13 @@ import abc
 import logging
 import uuid
 
+from debtcollector import renames
 from oslo_config import cfg
 from oslo_utils import timeutils
 import six
 from stevedore import named
 
+from oslo_messaging._i18n import _LE
 from oslo_messaging import serializer as msg_serializer
 from oslo_messaging import transport as msg_transport
 
@@ -141,9 +143,14 @@ class Notifier(object):
         notifier.info(ctxt, event_type, payload)
     """
 
+    @renames.renamed_kwarg('topic', 'topics',
+                           message="Please use topics instead of topic",
+                           version='4.5.0',
+                           removal_version='5.0.0')
     def __init__(self, transport, publisher_id=None,
                  driver=None, topic=None,
-                 serializer=None, retry=None):
+                 serializer=None, retry=None,
+                 topics=None):
         """Construct a Notifier object.
 
         :param transport: the transport to use for sending messages
@@ -162,6 +169,8 @@ class Notifier(object):
                       0 means no retry
                       N means N retries
         :type retry: int
+        :param topics: the topics which to send messages on
+        :type topic: list of strings
         """
         conf = transport.conf
         conf.register_opts(_notifier_opts,
@@ -174,8 +183,12 @@ class Notifier(object):
         self._driver_names = ([driver] if driver is not None else
                               conf.oslo_messaging_notifications.driver)
 
-        self._topics = ([topic] if topic is not None else
-                        conf.oslo_messaging_notifications.topics)
+        if topics is not None:
+            self._topics = topics
+        elif topic is not None:
+            self._topics = [topic]
+        else:
+            self._topics = conf.oslo_messaging_notifications.topics
         self._serializer = serializer or msg_serializer.NoOpSerializer()
 
         self._driver_mgr = named.NamedExtensionManager(
@@ -225,8 +238,8 @@ class Notifier(object):
             try:
                 ext.obj.notify(ctxt, msg, priority, retry or self.retry)
             except Exception as e:
-                _LOG.exception("Problem '%(e)s' attempting to send to "
-                               "notification system. Payload=%(payload)s",
+                _LOG.exception(_LE("Problem '%(e)s' attempting to send to "
+                                   "notification system. Payload=%(payload)s"),
                                dict(e=e, payload=payload))
 
         if self._driver_mgr.extensions:

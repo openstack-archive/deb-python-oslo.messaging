@@ -11,10 +11,10 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-import json
 import kafka
 from kafka.common import KafkaError
 import mock
+from oslo_serialization import jsonutils
 import testscenarios
 from testtools.testcase import unittest
 import time
@@ -101,7 +101,7 @@ class TestKafkaDriver(test_utils.BaseTestCase):
         with mock.patch.object(
                 kafka_driver.Connection, 'notify_send') as fake_send:
             self.driver.send_notification(target, {}, {}, None)
-            self.assertEquals(1, len(fake_send.mock_calls))
+            self.assertEqual(1, len(fake_send.mock_calls))
 
     def test_listen(self):
         target = oslo_messaging.Target(topic="topic_test")
@@ -145,9 +145,9 @@ class TestKafkaConnection(test_utils.BaseTestCase):
 
         conn.consumer = mock.MagicMock()
         conn.consumer.fetch_messages = mock.MagicMock(
-            return_value=iter([json.dumps(fake_message)]))
+            return_value=iter([jsonutils.dumps(fake_message)]))
 
-        self.assertEqual(fake_message, json.loads(conn.consume()[0]))
+        self.assertEqual(fake_message, jsonutils.loads(conn.consume()[0]))
         self.assertEqual(1, len(conn.consumer.fetch_messages.mock_calls))
 
     @mock.patch.object(kafka_driver.Connection, '_ensure_connection')
@@ -203,8 +203,7 @@ class TestKafkaListener(test_utils.BaseTestCase):
     def test_create_listener(self, fake_consumer, fake_ensure_connection):
         fake_target = oslo_messaging.Target(topic='fake_topic')
         fake_targets_and_priorities = [(fake_target, 'info')]
-        listener = self.driver.listen_for_notifications(
-            fake_targets_and_priorities)
+        self.driver.listen_for_notifications(fake_targets_and_priorities)
         self.assertEqual(1, len(fake_consumer.mock_calls))
 
     @mock.patch.object(kafka_driver.Connection, '_ensure_connection')
@@ -239,7 +238,7 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
 
     @unittest.skipUnless(
         _is_kafka_service_running(), "Kafka service is not available")
-    def test_send_and_recieve_message(self):
+    def test_send_and_receive_message(self):
         target = oslo_messaging.Target(
             topic="fake_topic", exchange='fake_exchange')
         targets_and_priorities = [(target, 'fake_info')]
@@ -257,7 +256,7 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
 
     @unittest.skipUnless(
         _is_kafka_service_running(), "Kafka service is not available")
-    def test_send_and_recieve_message_without_exchange(self):
+    def test_send_and_receive_message_without_exchange(self):
         target = oslo_messaging.Target(topic="fake_no_exchange_topic")
         targets_and_priorities = [(target, 'fake_info')]
 
@@ -274,7 +273,7 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
 
     @unittest.skipUnless(
         _is_kafka_service_running(), "Kafka service is not available")
-    def test_recieve_message_from_empty_topic_with_timeout(self):
+    def test_receive_message_from_empty_topic_with_timeout(self):
         target = oslo_messaging.Target(
             topic="fake_empty_topic", exchange='fake_empty_exchange')
         targets_and_priorities = [(target, 'fake_info')]
@@ -285,4 +284,4 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
         deadline = time.time() + 3
         received_message = listener.poll(timeout=3)
         self.assertEqual(0, int(deadline - time.time()))
-        self.assertEqual(None, received_message)
+        self.assertEqual([], received_message)

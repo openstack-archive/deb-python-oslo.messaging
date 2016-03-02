@@ -16,6 +16,9 @@ import logging
 
 import six
 
+from oslo_messaging._i18n import _
+
+
 __all__ = [
     "DispatcherBase",
     "DispatcherExecutorContext"
@@ -40,13 +43,11 @@ class DispatcherExecutorContext(object):
         thread.run(callback.run)
 
     """
-    def __init__(self, incoming, dispatch, executor_callback=None,
-                 post=None):
+    def __init__(self, incoming, dispatch, post=None):
         self._result = None
         self._incoming = incoming
         self._dispatch = dispatch
         self._post = post
-        self._executor_callback = executor_callback
 
     def run(self):
         """The incoming message dispath itself
@@ -55,10 +56,9 @@ class DispatcherExecutorContext(object):
         able to do it.
         """
         try:
-            self._result = self._dispatch(self._incoming,
-                                          self._executor_callback)
+            self._result = self._dispatch(self._incoming)
         except Exception:
-            msg = 'The dispatcher method must catches all exceptions'
+            msg = _('The dispatcher method must catches all exceptions')
             LOG.exception(msg)
             raise RuntimeError(msg)
 
@@ -89,7 +89,7 @@ class DispatcherBase(object):
     def _listen(self, transport):
         """Initiate the driver Listener
 
-        Usualy the driver Listener is start with the transport helper methods:
+        Usually the driver Listener is start with the transport helper methods:
 
         * transport._listen()
         * transport._listen_for_notifications()
@@ -101,7 +101,7 @@ class DispatcherBase(object):
         """
 
     @abc.abstractmethod
-    def __call__(self, incoming, executor_callback=None):
+    def __call__(self, incoming):
         """Called by the executor to get the DispatcherExecutorContext
 
         :param incoming: list of messages

@@ -47,27 +47,20 @@ class ZmqClientBase(object):
                 allowed_remote_exmods=self.allowed_remote_exmods)) as request:
             return self.call_publisher.send_request(request)
 
-    def send_cast(self, target, context, message, timeout=None, retry=None):
+    def send_cast(self, target, context, message, retry=None):
         with contextlib.closing(zmq_request.CastRequest(
                 target, context=context, message=message,
-                timeout=timeout, retry=retry)) as request:
+                retry=retry)) as request:
             self.cast_publisher.send_request(request)
 
-    def send_fanout(self, target, context, message, timeout=None, retry=None):
+    def send_fanout(self, target, context, message, retry=None):
         with contextlib.closing(zmq_request.FanoutRequest(
                 target, context=context, message=message,
-                timeout=timeout, retry=retry)) as request:
+                retry=retry)) as request:
             self.fanout_publisher.send_request(request)
 
     def send_notify(self, target, context, message, version, retry=None):
         with contextlib.closing(zmq_request.NotificationRequest(
-                target, context, message, version=version,
-                retry=retry)) as request:
-            self.notify_publisher.send_request(request)
-
-    def send_notify_fanout(self, target, context, message, version,
-                           retry=None):
-        with contextlib.closing(zmq_request.NotificationFanoutRequest(
                 target, context, message, version=version,
                 retry=retry)) as request:
             self.notify_publisher.send_request(request)

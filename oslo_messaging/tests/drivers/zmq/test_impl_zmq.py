@@ -12,8 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import logging
-
 import fixtures
 import testtools
 
@@ -21,13 +19,11 @@ import oslo_messaging
 from oslo_messaging._drivers import impl_zmq
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_socket
-from oslo_messaging.tests import utils as test_utils
 from oslo_messaging.tests.drivers.zmq import zmq_common
+from oslo_messaging.tests import utils as test_utils
 
-LOG = logging.getLogger(__name__)
 
 zmq = zmq_async.import_zmq()
-
 
 
 class ZmqTestPortsRange(zmq_common.ZmqBaseTestCase):
@@ -46,7 +42,7 @@ class ZmqTestPortsRange(zmq_common.ZmqBaseTestCase):
 
         for i in range(10):
             try:
-                target = oslo_messaging.Target(topic='testtopic_'+str(i))
+                target = oslo_messaging.Target(topic='testtopic_' + str(i))
                 new_listener = self.driver.listen(target)
                 listeners.append(new_listener)
             except zmq_socket.ZmqPortRangeExceededException:
@@ -56,6 +52,7 @@ class ZmqTestPortsRange(zmq_common.ZmqBaseTestCase):
 
         for l in listeners:
             l.cleanup()
+
 
 class TestConfZmqDriverLoad(test_utils.BaseTestCase):
 
@@ -78,7 +75,9 @@ class TestZmqBasics(zmq_common.ZmqBaseTestCase):
         self.assertRaises(
             KeyError,
             self.driver.send,
-            target, {}, {'tx_id': 1}, wait_for_reply=True)
+            target, {}, {'tx_id': 1},
+            wait_for_reply=True,
+            timeout=60)
 
     def test_send_receive_topic(self):
         """Call() with topic."""
@@ -88,7 +87,8 @@ class TestZmqBasics(zmq_common.ZmqBaseTestCase):
         result = self.driver.send(
             target, {},
             {'method': 'hello-world', 'tx_id': 1},
-            wait_for_reply=True)
+            wait_for_reply=True,
+            timeout=60)
         self.assertTrue(result)
 
     def test_send_noreply(self):
@@ -104,7 +104,7 @@ class TestZmqBasics(zmq_common.ZmqBaseTestCase):
         self.listener._received.wait()
 
         self.assertIsNone(result)
-        self.assertEqual(True, self.listener._received.isSet())
+        self.assertTrue(self.listener._received.isSet())
         method = self.listener.message.message[u'method']
         self.assertEqual(u'hello-world', method)
 
@@ -121,7 +121,7 @@ class TestZmqBasics(zmq_common.ZmqBaseTestCase):
         self.listener._received.wait()
 
         self.assertIsNone(result)
-        self.assertEqual(True, self.listener._received.isSet())
+        self.assertTrue(self.listener._received.isSet())
         method = self.listener.message.message[u'method']
         self.assertEqual(u'hello-world', method)
 
@@ -133,7 +133,8 @@ class TestZmqBasics(zmq_common.ZmqBaseTestCase):
         message = {'method': 'hello-world', 'tx_id': 1}
         context = {}
         result = self.driver.send(target, context, message,
-                                  wait_for_reply=True)
+                                  wait_for_reply=True,
+                                  timeout=60)
         self.assertTrue(result)
 
     def test_send_receive_notification(self):
@@ -145,7 +146,7 @@ class TestZmqBasics(zmq_common.ZmqBaseTestCase):
 
         message = {'method': 'hello-world', 'tx_id': 1}
         context = {}
-        target.topic = target.topic + '.info'
+        target.topic += '.info'
         self.driver.send_notification(target, context, message, '3.0')
         self.listener._received.wait(5)
         self.assertTrue(self.listener._received.isSet())

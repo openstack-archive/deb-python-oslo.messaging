@@ -19,6 +19,7 @@ import logging
 
 import six
 
+from oslo_messaging._i18n import _LE, _LW
 from oslo_messaging import dispatcher
 from oslo_messaging import localcontext
 from oslo_messaging import serializer as msg_serializer
@@ -60,10 +61,9 @@ class _NotificationDispatcherBase(dispatcher.DispatcherBase):
         return transport._listen_for_notifications(self._targets_priorities,
                                                    pool=self.pool)
 
-    def __call__(self, incoming, executor_callback=None):
+    def __call__(self, incoming):
         return dispatcher.DispatcherExecutorContext(
             incoming, self._dispatch_and_handle_error,
-            executor_callback=executor_callback,
             post=self._post_dispatch)
 
     def _post_dispatch(self, incoming, requeues):
@@ -74,20 +74,20 @@ class _NotificationDispatcherBase(dispatcher.DispatcherBase):
                 else:
                     m.acknowledge()
             except Exception:
-                LOG.error("Fail to ack/requeue message", exc_info=True)
+                LOG.error(_LE("Fail to ack/requeue message"), exc_info=True)
 
-    def _dispatch_and_handle_error(self, incoming, executor_callback):
+    def _dispatch_and_handle_error(self, incoming):
         """Dispatch a notification message to the appropriate endpoint method.
 
         :param incoming: the incoming notification message
         :type ctxt: IncomingMessage
         """
         try:
-            return self._dispatch(incoming, executor_callback)
+            return self._dispatch(incoming)
         except Exception:
-            LOG.error('Exception during message handling', exc_info=True)
+            LOG.error(_LE('Exception during message handling'), exc_info=True)
 
-    def _dispatch(self, incoming, executor_callback=None):
+    def _dispatch(self, incoming):
         """Dispatch notification messages to the appropriate endpoint method.
         """
 
@@ -101,7 +101,7 @@ class _NotificationDispatcherBase(dispatcher.DispatcherBase):
             raw_messages = list(raw_messages)
             messages = list(messages)
             if priority not in PRIORITIES:
-                LOG.warning('Unknown priority "%s"', priority)
+                LOG.warning(_LW('Unknown priority "%s"'), priority)
                 continue
             for screen, callback in self._callbacks_by_priority.get(priority,
                                                                     []):
@@ -119,18 +119,14 @@ class _NotificationDispatcherBase(dispatcher.DispatcherBase):
                 if not filtered_messages:
                     continue
 
-                ret = self._exec_callback(executor_callback, callback,
-                                          filtered_messages)
+                ret = self._exec_callback(callback, filtered_messages)
                 if self.allow_requeue and ret == NotificationResult.REQUEUE:
                     requeues.update(raw_messages)
                     break
         return requeues
 
-    def _exec_callback(self, executor_callback, callback, *args):
-        if executor_callback:
-            ret = executor_callback(callback, *args)
-        else:
-            ret = callback(*args)
+    def _exec_callback(self, callback, *args):
+        ret = callback(*args)
         return NotificationResult.HANDLED if ret is None else ret
 
     def _extract_user_message(self, incoming):
@@ -160,12 +156,12 @@ class NotificationDispatcher(_NotificationDispatcherBase):
     which is invoked with context and message dictionaries each time a message
     is received.
     """
-    def _exec_callback(self, executor_callback, callback, messages):
+    def _exec_callback(self, callback, messages):
         localcontext._set_local_context(
             messages[0]["ctxt"])
         try:
             return super(NotificationDispatcher, self)._exec_callback(
-                executor_callback, callback,
+                callback,
                 messages[0]["ctxt"],
                 messages[0]["publisher_id"],
                 messages[0]["event_type"],

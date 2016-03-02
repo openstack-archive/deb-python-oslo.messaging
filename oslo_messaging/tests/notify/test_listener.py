@@ -14,7 +14,6 @@
 #    under the License.
 
 import threading
-import time
 
 from oslo_config import cfg
 import testscenarios
@@ -147,7 +146,7 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
         self.assertIsInstance(listener.dispatcher,
                               dispatcher.NotificationDispatcher)
         self.assertIs(listener.dispatcher.endpoints, endpoints)
-        self.assertEqual('blocking', listener.executor)
+        self.assertEqual('blocking', listener.executor_type)
 
     def test_no_target_topic(self):
         transport = msg_notifier.get_notification_transport(
@@ -251,7 +250,6 @@ class TestNotifyListener(test_utils.BaseTestCase, ListenerSetupMixin):
                                    'timestamp': mock.ANY})]
 
         endpoint.info.assert_has_calls([mock.call(messages * 5)])
-
 
     def test_one_topic(self):
         transport = msg_notifier.get_notification_transport(

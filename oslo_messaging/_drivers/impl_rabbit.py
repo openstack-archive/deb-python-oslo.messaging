@@ -15,6 +15,7 @@
 import collections
 import contextlib
 import functools
+import itertools
 import os
 import random
 import socket
@@ -30,6 +31,8 @@ import kombu.messaging
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import netutils
+from oslo_utils import versionutils
+import pkg_resources
 import six
 from six.moves.urllib import parse
 
@@ -73,6 +76,10 @@ rabbit_opts = [
                  deprecated_group='DEFAULT',
                  help='How long to wait before reconnecting in response to an '
                       'AMQP consumer cancel notification.'),
+    cfg.StrOpt('kombu_compression',
+               help="EXPERIMENTAL: Possible values are: gzip, bz2. If not "
+                    "set compression will not be used. This option may not"
+                    "be available in future versions."),
     cfg.IntOpt('kombu_missing_consumer_retry_timeout',
                deprecated_name="kombu_reconnect_timeout",
                default=60,
@@ -128,6 +135,10 @@ rabbit_opts = [
                deprecated_group='DEFAULT',
                help='How long to backoff for between retries when connecting '
                     'to RabbitMQ.'),
+    cfg.IntOpt('rabbit_interval_max',
+               default=30,
+               help='Maximum interval of RabbitMQ connection retries. '
+                    'Default is 30 seconds.'),
     cfg.IntOpt('rabbit_max_retries',
                default=0,
                deprecated_group='DEFAULT',
@@ -136,9 +147,26 @@ rabbit_opts = [
     cfg.BoolOpt('rabbit_ha_queues',
                 default=False,
                 deprecated_group='DEFAULT',
-                help='Use HA queues in RabbitMQ (x-ha-policy: all). '
-                     'If you change this option, you must wipe the '
-                     'RabbitMQ database.'),
+                help='Try to use HA queues in RabbitMQ (x-ha-policy: all). '
+                'If you change this option, you must wipe the RabbitMQ '
+                'database. In RabbitMQ 3.0, queue mirroring is no longer '
+                'controlled by the x-ha-policy argument when declaring a '
+                'queue. If you just want to make sure that all queues (except '
+                ' those with auto-generated names) are mirrored across all '
+                'nodes, run: '
+                """\"rabbitmqctl set_policy HA '^(?!amq\.).*' """
+                """'{"ha-mode": "all"}' \""""),
+    cfg.IntOpt('rabbit_transient_queues_ttl',
+               min=1,
+               default=600,
+               help='Positive integer representing duration in seconds for '
+                    'queue TTL (x-expires). Queues which are unused for the '
+                    'duration of the TTL are automatically deleted. The '
+                    'parameter affects only reply and fanout queues.'),
+    cfg.IntOpt('rabbit_qos_prefetch_count',
+               default=0,
+               help='Specifies the number of messages to prefetch. Setting to '
+                    'zero allows unlimited messages.'),
     cfg.IntOpt('heartbeat_timeout_threshold',
                default=60,
                help="Number of seconds after which the Rabbit broker is "
@@ -160,18 +188,39 @@ rabbit_opts = [
 LOG = logging.getLogger(__name__)
 
 
-def _get_queue_arguments(rabbit_ha_queues):
+def _get_queue_arguments(rabbit_ha_queues, rabbit_queue_ttl):
     """Construct the arguments for declaring a queue.
 
-    If the rabbit_ha_queues option is set, we declare a mirrored queue
+    If the rabbit_ha_queues option is set, we try to declare a mirrored queue
     as described here:
 
       http://www.rabbitmq.com/ha.html
 
     Setting x-ha-policy to all means that the queue will be mirrored
-    to all nodes in the cluster.
+    to all nodes in the cluster. In RabbitMQ 3.0, queue mirroring is
+    no longer controlled by the x-ha-policy argument when declaring a
+    queue. If you just want to make sure that all queues (except those
+    with auto-generated names) are mirrored across all nodes, run:
+      rabbitmqctl set_policy HA '^(?!amq\.).*' '{"ha-mode": "all"}'
+
+    If the rabbit_queue_ttl option is > 0, then the queue is
+    declared with the "Queue TTL" value as described here:
+
+      https://www.rabbitmq.com/ttl.html
+
+    Setting a queue TTL causes the queue to be automatically deleted
+    if it is unused for the TTL duration.  This is a helpful safeguard
+    to prevent queues with zero consumers from growing without bound.
     """
-    return {'x-ha-policy': 'all'} if rabbit_ha_queues else {}
+    args = {}
+
+    if rabbit_ha_queues:
+        args['x-ha-policy'] = 'all'
+
+    if rabbit_queue_ttl > 0:
+        args['x-expires'] = rabbit_queue_ttl * 1000
+
+    return args
 
 
 class RabbitMessage(dict):
@@ -194,26 +243,29 @@ class Consumer(object):
     """Consumer class."""
 
     def __init__(self, exchange_name, queue_name, routing_key, type, durable,
-                 auto_delete, callback, nowait=True, rabbit_ha_queues=None):
+                 exchange_auto_delete, queue_auto_delete, callback,
+                 nowait=True, rabbit_ha_queues=None, rabbit_queue_ttl=0):
         """Init the Publisher class with the exchange_name, routing_key,
         type, durable auto_delete
         """
         self.queue_name = queue_name
         self.exchange_name = exchange_name
         self.routing_key = routing_key
-        self.auto_delete = auto_delete
+        self.exchange_auto_delete = exchange_auto_delete
+        self.queue_auto_delete = queue_auto_delete
         self.durable = durable
         self.callback = callback
         self.type = type
         self.nowait = nowait
-        self.queue_arguments = _get_queue_arguments(rabbit_ha_queues)
+        self.queue_arguments = _get_queue_arguments(rabbit_ha_queues,
+                                                    rabbit_queue_ttl)
 
         self.queue = None
         self.exchange = kombu.entity.Exchange(
             name=exchange_name,
             type=type,
             durable=self.durable,
-            auto_delete=self.auto_delete)
+            auto_delete=self.exchange_auto_delete)
 
     def declare(self, conn):
         """Re-declare the queue after a rabbit (re)connect."""
@@ -222,7 +274,7 @@ class Consumer(object):
             channel=conn.channel,
             exchange=self.exchange,
             durable=self.durable,
-            auto_delete=self.auto_delete,
+            auto_delete=self.queue_auto_delete,
             routing_key=self.routing_key,
             queue_arguments=self.queue_arguments)
 
@@ -265,7 +317,6 @@ class Consumer(object):
         m2p = getattr(self.queue.channel, 'message_to_python', None)
         if m2p:
             message = m2p(message)
-
         try:
             self.callback(RabbitMessage(message))
         except Exception:
@@ -362,6 +413,7 @@ class Connection(object):
         self.max_retries = driver_conf.rabbit_max_retries
         self.interval_start = driver_conf.rabbit_retry_interval
         self.interval_stepping = driver_conf.rabbit_retry_backoff
+        self.interval_max = driver_conf.rabbit_interval_max
 
         self.login_method = driver_conf.rabbit_login_method
         self.fake_rabbit = driver_conf.fake_rabbit
@@ -371,6 +423,9 @@ class Connection(object):
         self.rabbit_userid = driver_conf.rabbit_userid
         self.rabbit_password = driver_conf.rabbit_password
         self.rabbit_ha_queues = driver_conf.rabbit_ha_queues
+        self.rabbit_transient_queues_ttl = \
+            driver_conf.rabbit_transient_queues_ttl
+        self.rabbit_qos_prefetch_count = driver_conf.rabbit_qos_prefetch_count
         self.heartbeat_timeout_threshold = \
             driver_conf.heartbeat_timeout_threshold
         self.heartbeat_rate = driver_conf.heartbeat_rate
@@ -381,6 +436,7 @@ class Connection(object):
         self.kombu_missing_consumer_retry_timeout = \
             driver_conf.kombu_missing_consumer_retry_timeout
         self.kombu_failover_strategy = driver_conf.kombu_failover_strategy
+        self.kombu_compression = driver_conf.kombu_compression
 
         if self.rabbit_use_ssl:
             self.kombu_ssl_version = driver_conf.kombu_ssl_version
@@ -392,9 +448,6 @@ class Connection(object):
         if self.max_retries <= 0:
             self.max_retries = None
 
-        # max retry-interval = 30 seconds
-        self.interval_max = 30
-
         if url.virtual_host is not None:
             virtual_host = url.virtual_host
         else:
@@ -402,15 +455,16 @@ class Connection(object):
 
         self._url = ''
         if self.fake_rabbit:
-            LOG.warn("Deprecated: fake_rabbit option is deprecated, set "
-                     "rpc_backend to kombu+memory or use the fake "
-                     "driver instead.")
+            LOG.warning(_LW("Deprecated: fake_rabbit option is deprecated, "
+                            "set rpc_backend to kombu+memory or use the fake "
+                            "driver instead."))
             self._url = 'memory://%s/' % virtual_host
         elif url.hosts:
             if url.transport.startswith('kombu+'):
-                LOG.warn(_LW('Selecting the kombu transport through the '
-                             'transport url (%s) is a experimental feature '
-                             'and this is not yet supported.') % url.transport)
+                LOG.warning(_LW('Selecting the kombu transport through the '
+                                'transport url (%s) is a experimental feature '
+                                'and this is not yet supported.'),
+                            url.transport)
             if len(url.hosts) > 1:
                 random.shuffle(url.hosts)
             for host in url.hosts:
@@ -444,10 +498,14 @@ class Connection(object):
 
         self._initial_pid = os.getpid()
 
-        self._consumers = []
-        self._new_consumers = []
+        self._consumers = {}
+        self._new_tags = set()
+        self._active_tags = {}
+        self._tags = itertools.count(1)
+
         self._consume_loop_stopped = False
         self.channel = None
+        self.purpose = purpose
 
         # NOTE(sileht): if purpose is PURPOSE_LISTEN
         # we don't need the lock because we don't
@@ -600,10 +658,10 @@ class Connection(object):
 
         current_pid = os.getpid()
         if self._initial_pid != current_pid:
-            LOG.warn("Process forked after connection established! "
-                     "This can result in unpredictable behavior. "
-                     "See: http://docs.openstack.org/developer/"
-                     "oslo_messaging/transport.html")
+            LOG.warning(_LW("Process forked after connection established! "
+                            "This can result in unpredictable behavior. "
+                            "See: http://docs.openstack.org/developer/"
+                            "oslo.messaging/transport.html"))
             self._initial_pid = current_pid
 
         if retry is None:
@@ -684,8 +742,8 @@ class Connection(object):
                 errback=on_error,
                 interval_start=self.interval_start or 1,
                 interval_step=self.interval_stepping,
-                on_revive=on_reconnection,
-            )
+                interval_max=self.interval_max,
+                on_revive=on_reconnection)
             ret, channel = autoretry_method()
             self._set_current_channel(channel)
             return ret
@@ -716,10 +774,25 @@ class Connection(object):
 
         NOTE(sileht): Must be called within the connection lock
         """
-        if self.channel is not None and new_channel != self.channel:
+        if new_channel == self.channel:
+            return
+
+        if self.channel is not None:
             self.PUBLISHER_DECLARED_QUEUES.pop(self.channel, None)
             self.connection.maybe_close_channel(self.channel)
+
         self.channel = new_channel
+
+        if (new_channel is not None and
+           self.purpose == rpc_common.PURPOSE_LISTEN):
+            self._set_qos(new_channel)
+
+    def _set_qos(self, channel):
+        """Set QoS prefetch count on the channel"""
+        if self.rabbit_qos_prefetch_count > 0:
+            channel.basic_qos(0,
+                              self.rabbit_qos_prefetch_count,
+                              False)
 
     def close(self):
         """Close/release this connection."""
@@ -736,11 +809,14 @@ class Connection(object):
 
         with self._connection_lock:
             try:
-                for tag, consumer in enumerate(self._consumers):
+                for consumer, tag in self._consumers.items():
                     consumer.cancel(tag=tag)
             except recoverable_errors:
                 self.ensure_connection()
-            self._consumers = []
+            self._consumers.clear()
+            self._active_tags.clear()
+            self._new_tags.clear()
+            self._tags = itertools.count(1)
 
     def _heartbeat_supported_and_enabled(self):
         if self.heartbeat_timeout_threshold <= 0:
@@ -749,8 +825,8 @@ class Connection(object):
         if self.connection.supports_heartbeats:
             return True
         elif not self._heartbeat_support_log_emitted:
-            LOG.warn(_LW("Heartbeat support requested but it is not supported "
-                         "by the kombu driver or the broker"))
+            LOG.warning(_LW("Heartbeat support requested but it is not "
+                            "supported by the kombu driver or the broker"))
             self._heartbeat_support_log_emitted = True
         return False
 
@@ -760,7 +836,17 @@ class Connection(object):
         # or the producer.send return only when the system socket
         # timeout if reach. kombu doesn't allow use to customise this
         # timeout so for py-amqp we tweak ourself
-        sock = getattr(self.connection.transport, 'sock', None)
+        # NOTE(dmitryme): Current approach works with amqp==1.4.9 and
+        # kombu==3.0.33. Once the commit below is released, we should
+        # try to set the socket timeout in the constructor:
+        # https://github.com/celery/py-amqp/pull/64
+        try:
+            sock = self.channel.connection.sock
+        except AttributeError as e:
+            # Level is set to debug because otherwise we would spam the logs
+            LOG.debug('Failed to get socket attribute: %s' % str(e))
+            sock = None
+
         if sock:
             orig_timeout = sock.gettimeout()
             sock.settimeout(timeout)
@@ -769,7 +855,7 @@ class Connection(object):
             sock.settimeout(orig_timeout)
 
     def _heartbeat_check(self):
-        # NOTE(sileht): we are suposed to send at least one heartbeat
+        # NOTE(sileht): we are supposed to send at least one heartbeat
         # every heartbeat_timeout_threshold, so no need to way more
         with self._transport_socket_timeout(
                 self.heartbeat_timeout_threshold):
@@ -840,8 +926,13 @@ class Connection(object):
 
         def _declare_consumer():
             consumer.declare(self)
-            self._consumers.append(consumer)
-            self._new_consumers.append(consumer)
+            tag = self._active_tags.get(consumer.queue_name)
+            if tag is None:
+                tag = next(self._tags)
+                self._active_tags[consumer.queue_name] = tag
+                self._new_tags.add(tag)
+
+            self._consumers[consumer] = tag
             return consumer
 
         with self._connection_lock:
@@ -860,7 +951,7 @@ class Connection(object):
 
         def _recoverable_error_callback(exc):
             if not isinstance(exc, rpc_common.Timeout):
-                self._new_consumers = self._consumers
+                self._new_tags = set(self._consumers.values())
             timer.check_return(_raise_timeout, exc)
 
         def _error_callback(exc):
@@ -876,11 +967,11 @@ class Connection(object):
             if not self.connection.connected:
                 raise self.connection.recoverable_connection_errors[0]
 
-            if self._new_consumers:
-                for tag, consumer in enumerate(self._consumers):
-                    if consumer in self._new_consumers:
+            if self._new_tags:
+                for consumer, tag in self._consumers.items():
+                    if tag in self._new_tags:
                         consumer.consume(tag=tag)
-                self._new_consumers = []
+                        self._new_tags.remove(tag)
 
             poll_timeout = (self._poll_timeout if timeout is None
                             else min(timeout, self._poll_timeout))
@@ -917,9 +1008,11 @@ class Connection(object):
                             routing_key=topic,
                             type='direct',
                             durable=False,
-                            auto_delete=True,
+                            exchange_auto_delete=True,
+                            queue_auto_delete=False,
                             callback=callback,
-                            rabbit_ha_queues=self.rabbit_ha_queues)
+                            rabbit_ha_queues=self.rabbit_ha_queues,
+                            rabbit_queue_ttl=self.rabbit_transient_queues_ttl)
 
         self.declare_consumer(consumer)
 
@@ -931,7 +1024,8 @@ class Connection(object):
                             routing_key=topic,
                             type='topic',
                             durable=self.amqp_durable_queues,
-                            auto_delete=self.amqp_auto_delete,
+                            exchange_auto_delete=self.amqp_auto_delete,
+                            queue_auto_delete=self.amqp_auto_delete,
                             callback=callback,
                             rabbit_ha_queues=self.rabbit_ha_queues)
 
@@ -949,9 +1043,11 @@ class Connection(object):
                             routing_key=topic,
                             type='fanout',
                             durable=False,
-                            auto_delete=True,
+                            exchange_auto_delete=True,
+                            queue_auto_delete=False,
                             callback=callback,
-                            rabbit_ha_queues=self.rabbit_ha_queues)
+                            rabbit_ha_queues=self.rabbit_ha_queues,
+                            rabbit_queue_ttl=self.rabbit_transient_queues_ttl)
 
         self.declare_consumer(consumer)
 
@@ -970,17 +1066,24 @@ class Connection(object):
         with self._connection_lock:
             self.ensure(method, retry=retry, error_callback=_error_callback)
 
+    def _get_expiration(self, timeout):
+        # NOTE(gcb) kombu accept TTL as seconds instead of millisecond since
+        # version 3.0.25, so do conversion according to kombu version.
+        # TODO(gcb) remove this workaround when all supported branches
+        # with requirement kombu >=3.0.25
+        if timeout is not None:
+            kombu_version = pkg_resources.get_distribution('kombu').version
+            if not versionutils.is_compatible('3.0.25', kombu_version):
+                timeout = int(timeout * 1000)
+
+        return timeout
+
     def _publish(self, exchange, msg, routing_key=None, timeout=None):
         """Publish a message."""
         producer = kombu.messaging.Producer(exchange=exchange,
                                             channel=self.channel,
+                                            auto_declare=not exchange.passive,
                                             routing_key=routing_key)
-
-        expiration = None
-        if timeout:
-            # AMQP TTL is in milliseconds when set in the property.
-            # Details: http://www.rabbitmq.com/ttl.html#per-message-ttl
-            expiration = int(timeout * 1000)
 
         # NOTE(sileht): no need to wait more, caller expects
         # a answer before timeout is reached
@@ -1001,7 +1104,8 @@ class Connection(object):
         LOG.trace('Connection._publish: sending message %(msg)s to'
                   ' %(who)s with routing key %(key)s', log_info)
         with self._transport_socket_timeout(transport_timeout):
-            producer.publish(msg, expiration=expiration)
+            producer.publish(msg, expiration=self._get_expiration(timeout),
+                             compression=self.kombu_compression)
 
     # List of notification queue declared on the channel to avoid
     # unnecessary redeclaration. This list is resetted each time
@@ -1035,7 +1139,7 @@ class Connection(object):
                 auto_delete=exchange.auto_delete,
                 name=routing_key,
                 routing_key=routing_key,
-                queue_arguments=_get_queue_arguments(self.rabbit_ha_queues))
+                queue_arguments=_get_queue_arguments(self.rabbit_ha_queues, 0))
             log_info = {'key': routing_key, 'exchange': exchange}
             LOG.trace(
                 'Connection._publish_and_creates_default_queue: '
@@ -1091,7 +1195,8 @@ class Connection(object):
             auto_delete=self.amqp_auto_delete)
 
         self._ensure_publishing(self._publish, exchange, msg,
-                                routing_key=topic, retry=retry)
+                                routing_key=topic, timeout=timeout,
+                                retry=retry)
 
     def fanout_send(self, topic, msg, retry=None):
         """Send a 'fanout' message."""
@@ -1137,6 +1242,9 @@ class RabbitDriver(amqpdriver.AMQPDriverBase):
 
         self.missing_destination_retry_timeout = (
             conf.oslo_messaging_rabbit.kombu_missing_consumer_retry_timeout)
+
+        self.prefetch_size = (
+            conf.oslo_messaging_rabbit.rabbit_qos_prefetch_count)
 
         connection_pool = pool.ConnectionPool(
             conf, conf.oslo_messaging_rabbit.rpc_conn_pool_size,

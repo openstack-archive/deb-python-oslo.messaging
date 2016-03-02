@@ -32,17 +32,8 @@ More detail regarding ZeroMQ library is available from the `specification`_.
 Abstract
 ========
 
-In Folsom, OpenStack introduced an optional messaging system using ZeroMQ.
-For some deployments, especially for those super-large scenarios, it may be
-desirable to use a broker-less RPC mechanism to scale out.
-
-The original deployment guide only supports Nova in `folsom`_.
-
-.. _folsom: http://ewindisch.github.io/nova
-
-Currently, ZeroMQ is one of the RPC backend drivers in oslo.messaging. In the
-Juno release, as almost all the core projects in OpenStack have switched to
-oslo_messaging, ZeroMQ can be the only RPC driver across the OpenStack cluster.
+Currently, ZeroMQ is one of the RPC backend drivers in oslo.messaging. ZeroMQ
+can be the only RPC driver across the OpenStack cluster.
 This document provides deployment information for this driver in oslo_messaging.
 
 Other than AMQP-based drivers, like RabbitMQ, ZeroMQ doesn't have
@@ -90,7 +81,7 @@ Enabling (mandatory)
 
 To enable the driver, in the section [DEFAULT] of the conf file,
 the 'rpc_backend' flag must be set to 'zmq' and the 'rpc_zmq_host' flag
-must be set to the hostname of the current node.
+must be set to the hostname of the current node. ::
 
         [DEFAULT]
         rpc_backend = zmq
@@ -113,20 +104,27 @@ RedisMatchMaker: loads the hash table from a remote Redis server, supports
 dynamic host/topic registrations, host expiration, and hooks for consuming
 applications to acknowledge or neg-acknowledge topic.host service availability.
 
-To set the MatchMaker class, use option 'rpc_zmq_matchmaker' in [DEFAULT].
+To set the MatchMaker class, use option 'rpc_zmq_matchmaker' in [DEFAULT]. ::
 
         rpc_zmq_matchmaker = dummy
-        or
+
+or::
+
         rpc_zmq_matchmaker = redis
 
 To specify the Redis server for RedisMatchMaker, use options in
-[matchmaker_redis] of each project.
+[matchmaker_redis] of each project. ::
 
         [matchmaker_redis]
         host = 127.0.0.1
         port = 6379
         password = None
 
+In order to cleanup redis storage from expired records (e.g. target listener
+goes down) TTL may be applied for keys. Configure 'zmq_target_expire' option
+which is 120 (seconds) by default. The option is related not specifically to
+redis so it is also defined in [DEFAULT] section. If option value is <= 0
+then keys don't expire and live forever in the storage.
 
 MatchMaker Data Source (mandatory)
 ----------------------------------
@@ -140,19 +138,24 @@ stored in Redis is that the key is a base topic and the corresponding values are
 hostname arrays to be sent to.
 
 
-Proxy to avoid blocking (optional)
-----------------------------------
+Proxy for fanout publishing
+---------------------------
 
-Each machine running OpenStack services, or sending RPC messages, may run the
-'oslo-messaging-zmq-broker' daemon. This is needed to avoid blocking
-if a listener (server) appears after the sender (client).
+Each machine running OpenStack services, or sending RPC messages, should run
+the 'oslo-messaging-zmq-broker' daemon.
 
-Running the local broker (proxy) or not is defined by the option 'zmq_use_broker'
-(True by default). This option can be set in [DEFAULT] section.
+Fanout-based patterns like CAST+Fanout and notifications always use proxy
+as they act over PUB/SUB, 'use_pub_sub' - defaults to True. If not using
+PUB/SUB (use_pub_sub = False) then fanout will be emulated over direct
+DEALER/ROUTER unicast which is possible but less efficient and therefore
+is not recommended. In a case of direct DEALER/ROUTER unicast proxy is not
+needed.
+
+This option can be set in [DEFAULT] section.
 
 For example::
 
-        zmq_use_broker = False
+        use_pub_sub = True
 
 
 In case of using the broker all publishers (clients) talk to servers over

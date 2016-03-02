@@ -17,8 +17,9 @@ from oslo_messaging._drivers.zmq_driver.client.publishers.dealer \
     import zmq_dealer_call_publisher
 from oslo_messaging._drivers.zmq_driver.client.publishers.dealer \
     import zmq_dealer_publisher
+from oslo_messaging._drivers.zmq_driver.client.publishers \
+    import zmq_push_publisher
 from oslo_messaging._drivers.zmq_driver.client import zmq_client_base
-from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_names
 
@@ -30,9 +31,10 @@ class ZmqClient(zmq_client_base.ZmqClientBase):
     def __init__(self, conf, matchmaker=None, allowed_remote_exmods=None):
 
         default_publisher = zmq_dealer_publisher.DealerPublisher(
-            conf, matchmaker) if not conf.direct_over_proxy else \
-            zmq_dealer_publisher.DealerPublisherLight(
-                conf, zmq_address.get_broker_address(conf))
+            conf, matchmaker)
+
+        fanout_publisher = zmq_dealer_publisher.DealerPublisherLight(
+            conf, matchmaker) if conf.use_pub_sub else default_publisher
 
         super(ZmqClient, self).__init__(
             conf, matchmaker, allowed_remote_exmods,
@@ -41,13 +43,15 @@ class ZmqClient(zmq_client_base.ZmqClientBase):
                     zmq_dealer_call_publisher.DealerCallPublisher(
                         conf, matchmaker),
 
+                zmq_names.CAST_TYPE:
+                    zmq_push_publisher.PushPublisher(conf, matchmaker),
+
                 # Here use DealerPublisherLight for sending request to proxy
                 # which finally uses PubPublisher to send fanout in case of
                 # 'use_pub_sub' option configured.
-                zmq_names.CAST_FANOUT_TYPE:
-                    zmq_dealer_publisher.DealerPublisherLight(
-                        conf, zmq_address.get_broker_address(conf))
-                    if conf.use_pub_sub else default_publisher,
+                zmq_names.CAST_FANOUT_TYPE: fanout_publisher,
+
+                zmq_names.NOTIFY_TYPE: fanout_publisher,
 
                 "default": default_publisher
             }

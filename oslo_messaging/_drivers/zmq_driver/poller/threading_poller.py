@@ -55,7 +55,7 @@ class ThreadingPoller(zmq_poller.ZmqPoller):
         try:
             sockets = dict(self.poller.poll(timeout=timeout))
         except zmq.ZMQError as e:
-            LOG.debug("Polling terminated with error: %s" % e)
+            LOG.debug("Polling terminated with error: %s", e)
 
         if not sockets:
             return None, None
@@ -85,13 +85,14 @@ class ThreadingExecutor(zmq_poller.Executor):
             self._method()
 
     def execute(self):
+        self.thread.daemon = True
         self.thread.start()
 
     def stop(self):
         self._stop.set()
 
     def wait(self):
-        self.thread.join()
+        pass
 
     def done(self):
         self._stop.set()

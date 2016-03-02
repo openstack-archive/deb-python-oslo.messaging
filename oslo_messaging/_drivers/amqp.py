@@ -24,7 +24,6 @@ uses AMQP, but is deprecated and predates this code.
 """
 
 import collections
-import logging
 import uuid
 
 from oslo_config import cfg
@@ -51,7 +50,6 @@ amqp_opts = [
 ]
 
 UNIQUE_ID = '_unique_id'
-LOG = logging.getLogger(__name__)
 
 
 class RpcContext(rpc_common.CommonRpcContext):
@@ -59,7 +57,6 @@ class RpcContext(rpc_common.CommonRpcContext):
     def __init__(self, **kwargs):
         self.msg_id = kwargs.pop('msg_id', None)
         self.reply_q = kwargs.pop('reply_q', None)
-        self.conf = kwargs.pop('conf')
         super(RpcContext, self).__init__(**kwargs)
 
     def deepcopy(self):
@@ -70,7 +67,7 @@ class RpcContext(rpc_common.CommonRpcContext):
         return self.__class__(**values)
 
 
-def unpack_context(conf, msg):
+def unpack_context(msg):
     """Unpack context from msg."""
     context_dict = {}
     for key in list(msg.keys()):
@@ -80,7 +77,6 @@ def unpack_context(conf, msg):
             context_dict[key[9:]] = value
     context_dict['msg_id'] = msg.pop('_msg_id', None)
     context_dict['reply_q'] = msg.pop('_reply_q', None)
-    context_dict['conf'] = conf
     return RpcContext.from_dict(context_dict)
 
 

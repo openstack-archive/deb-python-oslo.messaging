@@ -29,8 +29,8 @@ import yaml
 
 import oslo_messaging
 from oslo_messaging.notify import _impl_log
-from oslo_messaging.notify import messaging
 from oslo_messaging.notify import _impl_test
+from oslo_messaging.notify import messaging
 from oslo_messaging.notify import notifier as msg_notifier
 from oslo_messaging import serializer as msg_serializer
 from oslo_messaging.tests import utils as test_utils
@@ -266,6 +266,31 @@ class TestSerializer(test_utils.BaseTestCase):
                          _impl_test.NOTIFICATIONS)
 
 
+class TestNotifierTopics(test_utils.BaseTestCase):
+
+    def test_topics_from_config(self):
+        self.config(driver=['log'],
+                    group='oslo_messaging_notifications')
+        self.config(topics=['topic1', 'topic2'],
+                    group='oslo_messaging_notifications')
+        transport = _FakeTransport(self.conf)
+
+        notifier = oslo_messaging.Notifier(transport, 'test.localhost')
+        self.assertEqual(['topic1', 'topic2'], notifier._topics)
+
+    def test_topics_from_kwargs(self):
+        self.config(driver=['log'],
+                    group='oslo_messaging_notifications')
+        transport = _FakeTransport(self.conf)
+
+        notifier = oslo_messaging.Notifier(transport, 'test.localhost',
+                                           topic='topic1')
+        self.assertEqual(['topic1'], notifier._topics)
+        notifier = oslo_messaging.Notifier(transport, 'test.localhost',
+                                           topics=['topic1', 'topic2'])
+        self.assertEqual(['topic1', 'topic2'], notifier._topics)
+
+
 class TestLogNotifier(test_utils.BaseTestCase):
 
     @mock.patch('oslo_utils.timeutils.utcnow')
@@ -328,7 +353,6 @@ class TestLogNotifier(test_utils.BaseTestCase):
         message = {'password': 'passw0rd', 'event_type': 'foo'}
         json_str = jsonutils.dumps(message)
         mask_str = strutils.mask_password(json_str)
-
 
         with mock.patch.object(logging, 'getLogger') as gl:
             gl.return_value = logger

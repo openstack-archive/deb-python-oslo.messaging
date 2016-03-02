@@ -21,6 +21,7 @@ import time
 import uuid
 
 import cachetools
+from oslo_utils import timeutils
 from six import moves
 
 import oslo_messaging
@@ -28,25 +29,26 @@ from oslo_messaging._drivers import amqp as rpc_amqp
 from oslo_messaging._drivers import base
 from oslo_messaging._drivers import common as rpc_common
 from oslo_messaging._i18n import _
+from oslo_messaging._i18n import _LE
 from oslo_messaging._i18n import _LI
 from oslo_messaging._i18n import _LW
 
 LOG = logging.getLogger(__name__)
 
 
-class AMQPIncomingMessage(base.IncomingMessage):
+class AMQPIncomingMessage(base.RpcIncomingMessage):
 
     def __init__(self, listener, ctxt, message, unique_id, msg_id, reply_q,
                  obsolete_reply_queues):
-        super(AMQPIncomingMessage, self).__init__(listener, ctxt,
-                                                  dict(message))
+        super(AMQPIncomingMessage, self).__init__(ctxt, message)
+        self.listener = listener
 
         self.unique_id = unique_id
         self.msg_id = msg_id
         self.reply_q = reply_q
-        self.acknowledge_callback = message.acknowledge
-        self.requeue_callback = message.requeue
         self._obsolete_reply_queues = obsolete_reply_queues
+        self.stopwatch = timeutils.StopWatch()
+        self.stopwatch.start()
 
     def _send_reply(self, conn, reply=None, failure=None, log_failure=True):
         if not self._obsolete_reply_queues.reply_q_valid(self.reply_q,
@@ -64,10 +66,12 @@ class AMQPIncomingMessage(base.IncomingMessage):
         unique_id = msg[rpc_amqp.UNIQUE_ID]
 
         LOG.debug("sending reply msg_id: %(msg_id)s "
-                  "reply queue: %(reply_q)s" % {
+                  "reply queue: %(reply_q)s "
+                  "time elapsed: %(elapsed)ss", {
                       'msg_id': self.msg_id,
                       'unique_id': unique_id,
-                      'reply_q': self.reply_q})
+                      'reply_q': self.reply_q,
+                      'elapsed': self.stopwatch.elapsed()})
         conn.direct_send(self.reply_q, rpc_common.serialize_msg(msg))
 
     def reply(self, reply=None, failure=None, log_failure=True):
@@ -99,7 +103,7 @@ class AMQPIncomingMessage(base.IncomingMessage):
                 if timer.check_return() > 0:
                     LOG.debug(("The reply %(msg_id)s cannot be sent  "
                                "%(reply_q)s reply queue don't exist, "
-                               "retrying...") % {
+                               "retrying..."), {
                                    'msg_id': self.msg_id,
                                    'reply_q': self.reply_q})
                     time.sleep(0.25)
@@ -107,14 +111,14 @@ class AMQPIncomingMessage(base.IncomingMessage):
                     self._obsolete_reply_queues.add(self.reply_q, self.msg_id)
                     LOG.info(_LI("The reply %(msg_id)s cannot be sent  "
                                  "%(reply_q)s reply queue don't exist after "
-                                 "%(duration)s sec abandoning...") % {
+                                 "%(duration)s sec abandoning..."), {
                                      'msg_id': self.msg_id,
                                      'reply_q': self.reply_q,
                                      'duration': duration})
                     return
 
     def acknowledge(self):
-        self.acknowledge_callback()
+        self.message.acknowledge()
         self.listener.msg_id_cache.add(self.unique_id)
 
     def requeue(self):
@@ -124,7 +128,7 @@ class AMQPIncomingMessage(base.IncomingMessage):
         # msg_id_cache, the message will be reconsumed, the only difference is
         # the message stay at the beginning of the queue instead of moving to
         # the end.
-        self.requeue_callback()
+        self.message.requeue()
 
 
 class ObsoleteReplyQueuesCache(object):
@@ -167,15 +171,16 @@ class ObsoleteReplyQueuesCache(object):
         self._no_reply_log(reply_q, msg_id)
 
     def _no_reply_log(self, reply_q, msg_id):
-        LOG.warn(_LW("%(reply_queue)s doesn't exists, drop reply to "
-                     "%(msg_id)s"), {'reply_queue': reply_q,
-                                     'msg_id': msg_id})
+        LOG.warning(_LW("%(reply_queue)s doesn't exists, drop reply to "
+                        "%(msg_id)s"), {'reply_queue': reply_q,
+                                        'msg_id': msg_id})
 
 
 class AMQPListener(base.Listener):
 
     def __init__(self, driver, conn):
-        super(AMQPListener, self).__init__(driver)
+        super(AMQPListener, self).__init__(driver.prefetch_size)
+        self.driver = driver
         self.conn = conn
         self.msg_id_cache = rpc_amqp._MsgIdCache()
         self.incoming = []
@@ -183,7 +188,7 @@ class AMQPListener(base.Listener):
         self._obsolete_reply_queues = ObsoleteReplyQueuesCache()
 
     def __call__(self, message):
-        ctxt = rpc_amqp.unpack_context(self.conf, message)
+        ctxt = rpc_amqp.unpack_context(message)
 
         # FIXME(sileht): Don't log the message until strutils is more
         # efficient, (rpc_amqp.unpack_context already log the context)
@@ -192,7 +197,7 @@ class AMQPListener(base.Listener):
 
         unique_id = self.msg_id_cache.check_duplicate_message(message)
 
-        LOG.debug("received message msg_id: %(msg_id)s reply to %(queue)s" % {
+        LOG.debug("received message msg_id: %(msg_id)s reply to %(queue)s", {
             'queue': ctxt.reply_q, 'msg_id': ctxt.msg_id})
 
         self.incoming.append(AMQPIncomingMessage(self,
@@ -250,10 +255,11 @@ class ReplyWaiters(object):
     def add(self, msg_id):
         self._queues[msg_id] = moves.queue.Queue()
         if len(self._queues) > self._wrn_threshold:
-            LOG.warn('Number of call queues is greater than warning '
-                     'threshold: %d. There could be a leak. Increasing'
-                     ' threshold to: %d', self._wrn_threshold,
-                     self._wrn_threshold * 2)
+            LOG.warning(_LW('Number of call queues is greater than warning '
+                            'threshold: %(old_threshold)s. There could be a '
+                            'leak. Increasing threshold to: %(threshold)s'),
+                        {'old_threshold': self._wrn_threshold,
+                         'threshold': self._wrn_threshold * 2})
             self._wrn_threshold *= 2
 
     def remove(self, msg_id):
@@ -286,14 +292,14 @@ class ReplyWaiter(object):
             try:
                 self.conn.consume()
             except Exception:
-                LOG.exception("Failed to process incoming message, "
-                              "retrying...")
+                LOG.exception(_LE("Failed to process incoming message, "
+                              "retrying..."))
 
     def __call__(self, message):
         message.acknowledge()
         incoming_msg_id = message.pop('_msg_id', None)
         if message.get('ending'):
-            LOG.debug("received reply msg_id: %s" % incoming_msg_id)
+            LOG.debug("received reply msg_id: %s", incoming_msg_id)
         self.waiters.put(incoming_msg_id, message)
 
     def listen(self, msg_id):

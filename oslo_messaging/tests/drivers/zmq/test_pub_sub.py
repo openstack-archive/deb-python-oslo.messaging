@@ -12,26 +12,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import logging
 import pickle
 import time
 
 import contextlib
-import fixtures
-import testtools
-
 
 import oslo_messaging
-from oslo_messaging._drivers import impl_zmq
-from oslo_messaging._drivers.zmq_driver import zmq_async
-from oslo_messaging._drivers.zmq_driver import zmq_socket
-from oslo_messaging._drivers.zmq_driver.client import zmq_request
 from oslo_messaging._drivers.zmq_driver.client.publishers \
     import zmq_pub_publisher
-from oslo_messaging.tests import utils as test_utils
+from oslo_messaging._drivers.zmq_driver.client import zmq_request
+from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging.tests.drivers.zmq import zmq_common
 
-LOG = logging.getLogger(__name__)
 
 zmq = zmq_async.import_zmq()
 
@@ -59,19 +51,19 @@ class TestPubSub(zmq_common.ZmqBaseTestCase):
         time.sleep(1)
         with contextlib.closing(zmq_request.FanoutRequest(
                 target, context={}, message={'method': 'hello-world'},
-                timeout=0, retry=None)) as request:
+                retry=None)) as request:
             self.publisher.send_request([request.create_envelope(),
                                          pickle.dumps(request)])
 
     def _check_listener(self, listener):
         listener._received.wait(timeout=5)
-        self.assertEqual(True, listener._received.isSet())
+        self.assertTrue(listener._received.isSet())
         method = listener.message.message[u'method']
         self.assertEqual(u'hello-world', method)
 
     def _check_listener_negative(self, listener):
         listener._received.wait(timeout=1)
-        self.assertEqual(False, listener._received.isSet())
+        self.assertFalse(listener._received.isSet())
 
     def test_single_listener(self):
         target = oslo_messaging.Target(topic='testtopic', fanout=True)
@@ -117,4 +109,3 @@ class TestPubSub(zmq_common.ZmqBaseTestCase):
 
         self._check_listener(self.listeners[0])
         self._check_listener(self.listeners[1])
-

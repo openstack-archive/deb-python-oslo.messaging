@@ -13,23 +13,19 @@
 
 import abc
 import collections
-import logging
-import retrying
 
 import six
 
 from oslo_messaging._drivers.zmq_driver import zmq_address
 
 
-LOG = logging.getLogger(__name__)
-
-
 @six.add_metaclass(abc.ABCMeta)
 class MatchMakerBase(object):
 
     def __init__(self, conf, *args, **kwargs):
-        super(MatchMakerBase, self).__init__(*args, **kwargs)
+        super(MatchMakerBase, self).__init__()
         self.conf = conf
+        self.url = kwargs.get('url')
 
     @abc.abstractmethod
     def register_publisher(self, hostname):
@@ -53,20 +49,6 @@ class MatchMakerBase(object):
        :type hostname: tuple
        """
 
-    def get_publishers_retrying(self):
-        """Retry until at least one publisher appears"""
-
-        def retry_if_empty(publishers):
-            return not publishers
-
-        _retry = retrying.retry(retry_on_result=retry_if_empty)
-
-        @_retry
-        def _get_publishers():
-            return self.get_publishers()
-
-        return _get_publishers()
-
     @abc.abstractmethod
     def get_publishers(self):
         """Get all publisher-hosts from nameserver.
@@ -75,8 +57,10 @@ class MatchMakerBase(object):
        """
 
     @abc.abstractmethod
-    def register(self, target, hostname, listener_type):
+    def register(self, target, hostname, listener_type, expire=-1):
         """Register target on nameserver.
+        If record already exists and has expiration timeout it will be
+        updated. Existing records without timeout will stay untouched
 
        :param target: the target for host
        :type target: Target
@@ -84,6 +68,8 @@ class MatchMakerBase(object):
        :type hostname: String
        :param listener_type: Listener socket type ROUTER, SUB etc.
        :type listener_type: String
+       :param expire: Record expiration timeout
+       :type expire: int
        """
 
     @abc.abstractmethod
@@ -127,7 +113,7 @@ class DummyMatchMaker(MatchMakerBase):
     def get_publishers(self):
         return list(self._publishers)
 
-    def register(self, target, hostname, listener_type):
+    def register(self, target, hostname, listener_type, expire=-1):
         key = zmq_address.target_to_key(target, listener_type)
         if hostname not in self._cache[key]:
             self._cache[key].append(hostname)

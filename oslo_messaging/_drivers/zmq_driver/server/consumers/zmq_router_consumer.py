@@ -21,18 +21,18 @@ from oslo_messaging._drivers.zmq_driver.server import zmq_incoming_message
 from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_names
-from oslo_messaging._i18n import _LE
+from oslo_messaging._i18n import _LE, _LI
 
 LOG = logging.getLogger(__name__)
 
 zmq = zmq_async.import_zmq()
 
 
-class RouterIncomingMessage(base.IncomingMessage):
+class RouterIncomingMessage(base.RpcIncomingMessage):
 
-    def __init__(self, listener, context, message, socket, reply_id, msg_id,
+    def __init__(self, context, message, socket, reply_id, msg_id,
                  poller):
-        super(RouterIncomingMessage, self).__init__(listener, context, message)
+        super(RouterIncomingMessage, self).__init__(context, message)
         self.socket = socket
         self.reply_id = reply_id
         self.msg_id = msg_id
@@ -54,24 +54,20 @@ class RouterConsumer(zmq_consumer_base.SingleSocketConsumer):
     def __init__(self, conf, poller, server):
         super(RouterConsumer, self).__init__(conf, poller, server, zmq.ROUTER)
         self.matchmaker = server.matchmaker
-        self.targets = []
         self.host = zmq_address.combine_address(self.conf.rpc_zmq_host,
                                                 self.port)
-        LOG.info("[%s] Run ROUTER consumer" % self.host)
+        self.targets = zmq_consumer_base.TargetsManager(
+            conf, self.matchmaker, self.host, zmq.ROUTER)
+        LOG.info(_LI("[%s] Run ROUTER consumer"), self.host)
 
     def listen(self, target):
-
-        LOG.info("[%s] Listen to target %s" % (self.host, target))
-
-        self.targets.append(target)
-        self.matchmaker.register(target, self.host,
-                                 zmq_names.socket_type_str(zmq.ROUTER))
+        LOG.info(_LI("[%(host)s] Listen to target %(target)s"),
+                 {'host': self.host, 'target': target})
+        self.targets.listen(target)
 
     def cleanup(self):
         super(RouterConsumer, self).cleanup()
-        for target in self.targets:
-            self.matchmaker.unregister(target, self.host,
-                                       zmq_names.socket_type_str(zmq.ROUTER))
+        self.targets.cleanup()
 
     def _receive_request(self, socket):
         reply_id = socket.recv()
@@ -83,38 +79,21 @@ class RouterConsumer(zmq_consumer_base.SingleSocketConsumer):
     def receive_message(self, socket):
         try:
             request, reply_id = self._receive_request(socket)
-            LOG.debug("[%(host)s] Received %(type)s, %(id)s, %(target)s"
-                      % {"host": self.host,
-                         "type": request.msg_type,
-                         "id": request.message_id,
-                         "target": request.target})
+            LOG.debug("[%(host)s] Received %(type)s, %(id)s, %(target)s",
+                      {"host": self.host,
+                       "type": request.msg_type,
+                       "id": request.message_id,
+                       "target": request.target})
 
             if request.msg_type == zmq_names.CALL_TYPE:
                 return zmq_incoming_message.ZmqIncomingRequest(
-                    self.server, socket, reply_id, request, self.poller)
+                    socket, reply_id, request, self.poller)
             elif request.msg_type in zmq_names.NON_BLOCKING_TYPES:
                 return RouterIncomingMessage(
-                    self.server, request.context, request.message, socket,
-                    reply_id, request.message_id, self.poller)
+                    request.context, request.message, socket, reply_id,
+                    request.message_id, self.poller)
             else:
-                LOG.error(_LE("Unknown message type: %s") % request.msg_type)
+                LOG.error(_LE("Unknown message type: %s"), request.msg_type)
 
         except zmq.ZMQError as e:
-            LOG.error(_LE("Receiving message failed: %s") % str(e))
-
-
-class RouterConsumerBroker(RouterConsumer):
-
-    def __init__(self, conf, poller, server):
-        super(RouterConsumerBroker, self).__init__(conf, poller, server)
-
-    def _receive_request(self, socket):
-        reply_id = socket.recv()
-        empty = socket.recv()
-        assert empty == b'', 'Bad format: empty delimiter expected'
-        envelope = socket.recv_pyobj()
-        request = socket.recv_pyobj()
-
-        if zmq_names.FIELD_REPLY_ID in envelope:
-            request.proxy_reply_id = envelope[zmq_names.FIELD_REPLY_ID]
-        return request, reply_id
+            LOG.error(_LE("Receiving message failed: %s"), str(e))

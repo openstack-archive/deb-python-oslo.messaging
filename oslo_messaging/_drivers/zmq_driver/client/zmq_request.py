@@ -68,7 +68,6 @@ class Request(object):
                 "retry must be an integer, not {0}".format(type(retry)))
 
         self.message_id = str(uuid.uuid1())
-        self.proxy_reply_id = None
 
     def create_envelope(self):
         return {'msg_type': self.msg_type,
@@ -92,20 +91,7 @@ class RpcRequest(Request):
             LOG.error(_LE("No method specified for RPC call"))
             raise KeyError(errmsg)
 
-        self.timeout = kwargs.pop("timeout")
-        assert self.timeout is not None, "Timeout should be specified!"
-
-        if not isinstance(self.timeout, int) and self.timeout is not None:
-            raise ValueError(
-                "timeout must be an integer, not {0}"
-                .format(type(self.timeout)))
-
         super(RpcRequest, self).__init__(*args, **kwargs)
-
-    def create_envelope(self):
-        envelope = super(RpcRequest, self).create_envelope()
-        envelope['timeout'] = self.timeout
-        return envelope
 
 
 class CallRequest(RpcRequest):
@@ -114,7 +100,21 @@ class CallRequest(RpcRequest):
 
     def __init__(self, *args, **kwargs):
         self.allowed_remote_exmods = kwargs.pop("allowed_remote_exmods")
+
+        self.timeout = kwargs.pop("timeout")
+        if self.timeout is None:
+            raise ValueError("Timeout should be specified for a RPC call!")
+        elif not isinstance(self.timeout, int):
+            raise ValueError(
+                "timeout must be an integer, not {0}"
+                .format(type(self.timeout)))
+
         super(CallRequest, self).__init__(*args, **kwargs)
+
+    def create_envelope(self):
+        envelope = super(CallRequest, self).create_envelope()
+        envelope['timeout'] = self.timeout
+        return envelope
 
 
 class CastRequest(RpcRequest):
@@ -134,8 +134,3 @@ class NotificationRequest(Request):
     def __init__(self, *args, **kwargs):
         self.version = kwargs.pop("version")
         super(NotificationRequest, self).__init__(*args, **kwargs)
-
-
-class NotificationFanoutRequest(NotificationRequest):
-
-    msg_type = zmq_names.NOTIFY_FANOUT_TYPE

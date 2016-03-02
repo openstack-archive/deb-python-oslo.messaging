@@ -24,7 +24,9 @@ import kombu
 import kombu.transport.memory
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+from oslo_utils import versionutils
 from oslotest import mockpatch
+import pkg_resources
 import testscenarios
 
 import oslo_messaging
@@ -90,11 +92,11 @@ class TestHeartbeat(test_utils.BaseTestCase):
 
         if not heartbeat_side_effect:
             self.assertEqual(1, fake_ensure_connection.call_count)
-            self.assertEqual(2, fake_logger.debug.call_count)
+            self.assertEqual(3, fake_logger.debug.call_count)
             self.assertEqual(0, fake_logger.info.call_count)
         else:
             self.assertEqual(2, fake_ensure_connection.call_count)
-            self.assertEqual(2, fake_logger.debug.call_count)
+            self.assertEqual(3, fake_logger.debug.call_count)
             self.assertEqual(1, fake_logger.info.call_count)
             self.assertIn(mock.call(info, mock.ANY),
                           fake_logger.info.mock_calls)
@@ -107,6 +109,31 @@ class TestHeartbeat(test_utils.BaseTestCase):
             heartbeat_side_effect=kombu.exceptions.ConnectionError,
             info='A recoverable connection/channel error occurred, '
             'trying to reconnect: %s')
+
+
+class TestRabbitQos(test_utils.BaseTestCase):
+
+    def connection_with(self, prefetch, purpose):
+        self.config(rabbit_qos_prefetch_count=prefetch,
+                    group="oslo_messaging_rabbit")
+        transport = oslo_messaging.get_transport(self.conf,
+                                                 'kombu+memory:////')
+        transport._driver._get_connection(purpose)
+
+    @mock.patch('kombu.transport.memory.Channel.basic_qos')
+    def test_qos_sent_on_listen_connection(self, fake_basic_qos):
+        self.connection_with(prefetch=1, purpose=driver_common.PURPOSE_LISTEN)
+        fake_basic_qos.assert_called_once_with(0, 1, False)
+
+    @mock.patch('kombu.transport.memory.Channel.basic_qos')
+    def test_qos_not_sent_when_cfg_zero(self, fake_basic_qos):
+        self.connection_with(prefetch=0, purpose=driver_common.PURPOSE_LISTEN)
+        fake_basic_qos.assert_not_called()
+
+    @mock.patch('kombu.transport.memory.Channel.basic_qos')
+    def test_qos_not_sent_on_send_connection(self, fake_basic_qos):
+        self.connection_with(prefetch=1, purpose=driver_common.PURPOSE_SEND)
+        fake_basic_qos.assert_not_called()
 
 
 class TestRabbitDriverLoad(test_utils.BaseTestCase):
@@ -176,20 +203,37 @@ class TestRabbitPublisher(test_utils.BaseTestCase):
     def test_send_with_timeout(self, fake_publish):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
-        with transport._driver._get_connection(driver_common.PURPOSE_SEND) as pool_conn:
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_SEND) as pool_conn:
             conn = pool_conn.connection
             conn._publish(mock.Mock(), 'msg', routing_key='routing_key',
                           timeout=1)
-        fake_publish.assert_called_with('msg', expiration=1000)
+
+        # NOTE(gcb) kombu accept TTL as seconds instead of millisecond since
+        # version 3.0.25, so do conversion according to kombu version.
+        # TODO(gcb) remove this workaround when all supported branches
+        # with requirement kombu >=3.0.25
+        kombu_version = pkg_resources.get_distribution('kombu').version
+        if versionutils.is_compatible('3.0.25', kombu_version):
+            fake_publish.assert_called_with(
+                'msg', expiration=1,
+                compression=self.conf.oslo_messaging_rabbit.kombu_compression)
+        else:
+            fake_publish.assert_called_with(
+                'msg', expiration=1000,
+                compression=self.conf.oslo_messaging_rabbit.kombu_compression)
 
     @mock.patch('kombu.messaging.Producer.publish')
     def test_send_no_timeout(self, fake_publish):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
-        with transport._driver._get_connection(driver_common.PURPOSE_SEND) as pool_conn:
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_SEND) as pool_conn:
             conn = pool_conn.connection
             conn._publish(mock.Mock(), 'msg', routing_key='routing_key')
-        fake_publish.assert_called_with('msg', expiration=None)
+        fake_publish.assert_called_with(
+            'msg', expiration=None,
+            compression=self.conf.oslo_messaging_rabbit.kombu_compression)
 
     def test_declared_queue_publisher(self):
         transport = oslo_messaging.get_transport(self.conf,
@@ -206,7 +250,8 @@ class TestRabbitPublisher(test_utils.BaseTestCase):
             type='topic',
             passive=False)
 
-        with transport._driver._get_connection(driver_common.PURPOSE_SEND) as pool_conn:
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_SEND) as pool_conn:
             conn = pool_conn.connection
             exc = conn.connection.channel_errors[0]
 
@@ -239,7 +284,8 @@ class TestRabbitConsume(test_utils.BaseTestCase):
                                                  'kombu+memory:////')
         self.addCleanup(transport.cleanup)
         deadline = time.time() + 6
-        with transport._driver._get_connection(driver_common.PURPOSE_LISTEN) as conn:
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_LISTEN) as conn:
             self.assertRaises(driver_common.Timeout,
                               conn.consume, timeout=3)
 
@@ -258,7 +304,8 @@ class TestRabbitConsume(test_utils.BaseTestCase):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
         self.addCleanup(transport.cleanup)
-        with transport._driver._get_connection(driver_common.PURPOSE_LISTEN) as conn:
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_LISTEN) as conn:
             channel = conn.connection.channel
             with mock.patch('kombu.connection.Connection.connected',
                             new_callable=mock.PropertyMock,
@@ -468,7 +515,8 @@ class TestSendReceive(test_utils.BaseTestCase):
             # kombu_missing_consumer_retry_timeout seconds to fail
             # next immediately fail
             dt = time.time() - start
-            timeout = self.conf.oslo_messaging_rabbit.kombu_missing_consumer_retry_timeout
+            rabbit_conf = self.conf.oslo_messaging_rabbit
+            timeout = rabbit_conf.kombu_missing_consumer_retry_timeout
             self.assertTrue(timeout <= dt < (timeout + 0.100), dt)
 
         self.assertEqual(len(senders), len(replies))
@@ -681,11 +729,17 @@ class TestRequestWireFormat(test_utils.BaseTestCase):
                              '_context_project': 'snarkybunch'})),
     ]
 
+    _compression = [
+        ('gzip_compression', dict(compression='gzip')),
+        ('without_compression', dict(compression=None))
+    ]
+
     @classmethod
     def generate_scenarios(cls):
         cls.scenarios = testscenarios.multiply_scenarios(cls._msg,
                                                          cls._context,
-                                                         cls._target)
+                                                         cls._target,
+                                                         cls._compression)
 
     def setUp(self):
         super(TestRequestWireFormat, self).setUp()
@@ -698,7 +752,7 @@ class TestRequestWireFormat(test_utils.BaseTestCase):
         return self.uuids[-1]
 
     def test_request_wire_format(self):
-
+        self.conf.oslo_messaging_rabbit.kombu_compression = self.compression
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
         self.addCleanup(transport.cleanup)
@@ -821,13 +875,20 @@ class TestReplyWireFormat(test_utils.BaseTestCase):
               expected_ctxt={'user': 'mark', 'project': 'snarkybunch'})),
     ]
 
+    _compression = [
+        ('gzip_compression', dict(compression='gzip')),
+        ('without_compression', dict(compression=None))
+    ]
+
     @classmethod
     def generate_scenarios(cls):
         cls.scenarios = testscenarios.multiply_scenarios(cls._msg,
                                                          cls._context,
-                                                         cls._target)
+                                                         cls._target,
+                                                         cls._compression)
 
     def test_reply_wire_format(self):
+        self.conf.oslo_messaging_rabbit.kombu_compression = self.compression
 
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')

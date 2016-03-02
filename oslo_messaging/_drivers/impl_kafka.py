@@ -35,8 +35,8 @@ kafka_opts = [
     cfg.StrOpt('kafka_default_host', default='localhost',
                help='Default Kafka broker Host'),
 
-    cfg.IntOpt('kafka_default_port', default=9092,
-               help='Default Kafka broker Port'),
+    cfg.PortOpt('kafka_default_port', default=9092,
+                help='Default Kafka broker Port'),
 
     cfg.IntOpt('kafka_max_fetch_bytes', default=1024 * 1024,
                help='Max fetch bytes of Kafka consumer'),
@@ -132,7 +132,8 @@ class Connection(object):
                 self._send(message, topic)
                 message = None
             except Exception:
-                LOG.warn(_LW("Failed to publish a message of topic %s"), topic)
+                LOG.warning(_LW("Failed to publish a message of topic %s"),
+                            topic)
                 current_retry += 1
                 if retry is not None and current_retry >= retry:
                     LOG.exception(_LE("Failed to retry to send data "
@@ -143,11 +144,9 @@ class Connection(object):
         self.producer.send_messages(topic, message)
 
     def consume(self, timeout=None):
-        """recieve messages as many as max_fetch_messages.
+        """Receive up to 'max_fetch_messages' messages.
 
-        In this functions, there are no while loop to subscribe.
-        This would be helpful when we wants to control the velocity of
-        subscription.
+        :param timeout: poll timeout in seconds
         """
         duration = (self.consumer_timeout if timeout is None else timeout)
         timer = driver_common.DecayingTimer(duration=duration)
@@ -227,27 +226,26 @@ class Connection(object):
     def declare_topic_consumer(self, topics, group=None):
         self.consumer = kafka.KafkaConsumer(
             *topics, group_id=group,
-            metadata_broker_list=["%s:%s" % (self.host, str(self.port))],
-            # auto_commit_enable=self.auto_commit,
+            bootstrap_servers=["%s:%s" % (self.host, str(self.port))],
             fetch_message_max_bytes=self.fetch_messages_max_bytes)
 
 
-class OsloKafkaMessage(base.IncomingMessage):
+class OsloKafkaMessage(base.RpcIncomingMessage):
 
-    def __init__(self, listener, ctxt, message):
-        super(OsloKafkaMessage, self).__init__(listener, ctxt, message)
+    def __init__(self, ctxt, message):
+        super(OsloKafkaMessage, self).__init__(ctxt, message)
 
     def requeue(self):
-        LOG.warn(_LW("requeue is not supported"))
+        LOG.warning(_LW("requeue is not supported"))
 
     def reply(self, reply=None, failure=None, log_failure=True):
-        LOG.warn(_LW("reply is not supported"))
+        LOG.warning(_LW("reply is not supported"))
 
 
 class KafkaListener(base.Listener):
 
-    def __init__(self, driver, conn):
-        super(KafkaListener, self).__init__(driver)
+    def __init__(self, conn):
+        super(KafkaListener, self).__init__()
         self._stopped = threading.Event()
         self.conn = conn
         self.incoming_queue = []
@@ -261,10 +259,10 @@ class KafkaListener(base.Listener):
                 messages = self.conn.consume(timeout=timeout)
                 for msg in messages:
                     message = msg.value
+                    LOG.debug('poll got message : %s', message)
                     message = jsonutils.loads(message)
                     self.incoming_queue.append(OsloKafkaMessage(
-                        listener=self, ctxt=message['context'],
-                        message=message['message']))
+                        ctxt=message['context'], message=message['message']))
             except driver_common.Timeout:
                 return None
 
@@ -357,7 +355,7 @@ class KafkaDriver(base.BaseDriver):
 
         conn.declare_topic_consumer(topics, pool)
 
-        listener = KafkaListener(self, conn)
+        listener = KafkaListener(conn)
         return listener
 
     def _get_connection(self, purpose):

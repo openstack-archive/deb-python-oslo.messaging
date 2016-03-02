@@ -13,11 +13,15 @@
 #    under the License.
 
 import logging
+import uuid
 
+import six
+
+from oslo_messaging._drivers import common as rpc_common
 from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_names
-from oslo_messaging._i18n import _LE
+from oslo_messaging._i18n import _LE, _LI
 from oslo_messaging import exceptions
 
 LOG = logging.getLogger(__name__)
@@ -27,10 +31,17 @@ zmq = zmq_async.import_zmq()
 
 class ZmqSocket(object):
 
-    def __init__(self, context, socket_type):
+    def __init__(self, conf, context, socket_type):
+        self.conf = conf
         self.context = context
         self.socket_type = socket_type
         self.handle = context.socket(socket_type)
+
+        self.close_linger = -1
+        if self.conf.rpc_cast_timeout > 0:
+            self.close_linger = self.conf.rpc_cast_timeout * 1000
+        self.handle.setsockopt(zmq.LINGER, self.close_linger)
+
         self.connections = set()
 
     def type_name(self):
@@ -83,6 +94,29 @@ class ZmqSocket(object):
     def close(self, *args, **kwargs):
         self.handle.close(*args, **kwargs)
 
+    def connect_to_address(self, address):
+        stype = zmq_names.socket_type_str(self.socket_type)
+        try:
+            LOG.info(_LI("Connecting %(stype)s to %(address)s"),
+                     {"stype": stype, "address": address})
+
+            if six.PY3:
+                self.setsockopt_string(zmq.IDENTITY, str(uuid.uuid1()))
+            else:
+                self.handle.identity = str(uuid.uuid1())
+
+            self.connect(address)
+        except zmq.ZMQError as e:
+            errmsg = _LE("Failed connecting %(stype) to %(address)s: %(e)s")\
+                % (stype, address, e)
+            LOG.error(_LE("Failed connecting %(stype) to %(address)s: %(e)s"),
+                      (stype, address, e))
+            raise rpc_common.RPCException(errmsg)
+
+    def connect_to_host(self, host):
+        address = zmq_address.get_tcp_direct_address(host)
+        self.connect_to_address(address)
+
 
 class ZmqPortRangeExceededException(exceptions.MessagingException):
     """Raised by ZmqRandomPortSocket - wrapping zmq.ZMQBindError"""
@@ -91,8 +125,7 @@ class ZmqPortRangeExceededException(exceptions.MessagingException):
 class ZmqRandomPortSocket(ZmqSocket):
 
     def __init__(self, conf, context, socket_type):
-        super(ZmqRandomPortSocket, self).__init__(context, socket_type)
-        self.conf = conf
+        super(ZmqRandomPortSocket, self).__init__(conf, context, socket_type)
         self.bind_address = zmq_address.get_tcp_random_address(self.conf)
 
         try:

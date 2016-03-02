@@ -25,12 +25,15 @@ from oslo_messaging._drivers import common as rpc_common
 from oslo_messaging._drivers.zmq_driver.client import zmq_client
 from oslo_messaging._drivers.zmq_driver.server import zmq_server
 from oslo_messaging._drivers.zmq_driver import zmq_async
-from oslo_messaging._executors import impl_pooledexecutor
 from oslo_messaging._i18n import _LE
+from oslo_messaging import server
 
 
-LOG = logging.getLogger(__name__)
 RPCException = rpc_common.RPCException
+_MATCHMAKER_BACKENDS = ('redis', 'dummy')
+_MATCHMAKER_DEFAULT = 'redis'
+LOG = logging.getLogger(__name__)
+
 
 zmq_opts = [
     cfg.StrOpt('rpc_zmq_bind_address', default='*',
@@ -39,7 +42,8 @@ zmq_opts = [
                     'The "host" option should point or resolve to this '
                     'address.'),
 
-    cfg.StrOpt('rpc_zmq_matchmaker', default='redis',
+    cfg.StrOpt('rpc_zmq_matchmaker', default=_MATCHMAKER_DEFAULT,
+               choices=_MATCHMAKER_BACKENDS,
                help='MatchMaker driver.'),
 
     cfg.StrOpt('rpc_zmq_concurrency', default='eventlet',
@@ -60,17 +64,20 @@ zmq_opts = [
                help='Name of this node. Must be a valid hostname, FQDN, or '
                     'IP address. Must match "host" option, if running Nova.'),
 
-    cfg.IntOpt('rpc_cast_timeout', default=30,
+    cfg.IntOpt('rpc_cast_timeout', default=-1,
                help='Seconds to wait before a cast expires (TTL). '
-                    'Only supported by impl_zmq.'),
+                    'The default value of -1 specifies an infinite linger '
+                    'period. The value of 0 specifies no linger period. '
+                    'Pending messages shall be discarded immediately '
+                    'when the socket is closed. Only supported by impl_zmq.'),
 
     cfg.IntOpt('rpc_poll_timeout', default=1,
                help='The default number of seconds that poll should wait. '
                     'Poll raises timeout exception when timeout expired.'),
 
-    cfg.BoolOpt('direct_over_proxy', default=True,
-                help='Configures zmq-messaging to use proxy with '
-                     'non PUB/SUB patterns.'),
+    cfg.IntOpt('zmq_target_expire', default=120,
+               help='Expiration timeout in seconds of a name service record '
+                    'about existing target ( < 0 means no timeout).'),
 
     cfg.BoolOpt('use_pub_sub', default=True,
                 help='Use PUB/SUB pattern for fanout methods. '
@@ -113,11 +120,10 @@ class LazyDriverItem(object):
         if self.item is not None and os.getpid() == self.process_id:
             return self.item
 
-        self._lock.acquire()
-        if self.item is None or os.getpid() != self.process_id:
-            self.process_id = os.getpid()
-            self.item = self.item_class(*self.args, **self.kwargs)
-        self._lock.release()
+        with self._lock:
+            if self.item is None or os.getpid() != self.process_id:
+                self.process_id = os.getpid()
+                self.item = self.item_class(*self.args, **self.kwargs)
         return self.item
 
     def cleanup(self):
@@ -160,21 +166,15 @@ class ZmqDriver(base.BaseDriver):
             raise ImportError(_LE("ZeroMQ is not available!"))
 
         conf.register_opts(zmq_opts)
-        conf.register_opts(impl_pooledexecutor._pool_opts)
+        conf.register_opts(server._pool_opts)
         conf.register_opts(base.base_opts)
         self.conf = conf
         self.allowed_remote_exmods = allowed_remote_exmods
 
         self.matchmaker = driver.DriverManager(
             'oslo.messaging.zmq.matchmaker',
-            self.conf.rpc_zmq_matchmaker,
-        ).driver(self.conf)
-
-        self.server = LazyDriverItem(
-            zmq_server.ZmqServer, self, self.conf, self.matchmaker)
-
-        self.notify_server = LazyDriverItem(
-            zmq_server.ZmqServer, self, self.conf, self.matchmaker)
+            self.get_matchmaker_backend(url),
+        ).driver(self.conf, url=url)
 
         self.client = LazyDriverItem(
             zmq_client.ZmqClient, self.conf, self.matchmaker,
@@ -186,6 +186,19 @@ class ZmqDriver(base.BaseDriver):
 
         super(ZmqDriver, self).__init__(conf, url, default_exchange,
                                         allowed_remote_exmods)
+
+    def get_matchmaker_backend(self, url):
+        zmq_transport, p, matchmaker_backend = url.transport.partition('+')
+        assert zmq_transport == 'zmq', "Needs to be zmq for this transport!"
+        if not matchmaker_backend:
+            return self.conf.rpc_zmq_matchmaker
+        elif matchmaker_backend not in _MATCHMAKER_BACKENDS:
+            raise rpc_common.RPCException(
+                _LE("Incorrect matchmaker backend name %(backend_name)s!"
+                    "Available names are: %(available_names)s") %
+                {"backend_name": matchmaker_backend,
+                 "available_names": _MATCHMAKER_BACKENDS})
+        return matchmaker_backend
 
     def send(self, target, ctxt, message, wait_for_reply=None, timeout=None,
              retry=None):
@@ -208,13 +221,12 @@ class ZmqDriver(base.BaseDriver):
         :type retry: int
         """
         client = self.client.get()
-        timeout = timeout or self.conf.rpc_response_timeout
         if wait_for_reply:
             return client.send_call(target, ctxt, message, timeout, retry)
         elif target.fanout:
-            client.send_fanout(target, ctxt, message, timeout, retry)
+            client.send_fanout(target, ctxt, message, retry)
         else:
-            client.send_cast(target, ctxt, message, timeout, retry)
+            client.send_cast(target, ctxt, message, retry)
 
     def send_notification(self, target, ctxt, message, version, retry=None):
         """Send notification to server
@@ -234,10 +246,7 @@ class ZmqDriver(base.BaseDriver):
         :type retry: int
         """
         client = self.notifier.get()
-        if target.fanout:
-            client.send_notify_fanout(target, ctxt, message, version, retry)
-        else:
-            client.send_notify(target, ctxt, message, version, retry)
+        client.send_notify(target, ctxt, message, version, retry)
 
     def listen(self, target):
         """Listen to a specified target on a server side
@@ -257,7 +266,7 @@ class ZmqDriver(base.BaseDriver):
         :param pool: Not used for zmq implementation
         :type pool: object
         """
-        server = self.notify_server.get()
+        server = zmq_server.ZmqServer(self, self.conf, self.matchmaker)
         server.listen_notification(targets_and_priorities)
         return server
 
@@ -265,6 +274,4 @@ class ZmqDriver(base.BaseDriver):
         """Cleanup all driver's connections finally
         """
         self.client.cleanup()
-        self.server.cleanup()
-        self.notify_server.cleanup()
         self.notifier.cleanup()

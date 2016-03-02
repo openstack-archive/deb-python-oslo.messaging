@@ -1,0 +1,42 @@
+# Translations template for oslo.messaging.
+# Copyright (C) 2016 ORGANIZATION
+# This file is distributed under the same license as the oslo.messaging
+# project.
+# FIRST AUTHOR <EMAIL@ADDRESS>, 2016.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: oslo.messaging 4.0.1.dev43\n"
+"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
+"POT-Creation-Date: 2016-01-19 06:14+0000\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.2.0\n"
+
+#: oslo_messaging/server.py:115
+#, python-format
+msgid "Possible hang: %s"
+msgstr ""
+
+#: oslo_messaging/server.py:349
+msgid ""
+"Restarting a MessageHandlingServer is inherently racy. It is deprecated, "
+"and will become a noop in a future release of oslo.messaging. If you need"
+" to restart MessageHandlingServer you should instantiate a new object."
+msgstr ""
+
+#: oslo_messaging/notify/_impl_routing.py:82
+#, python-format
+msgid "Failed to load any notifiers for %s"
+msgstr ""
+
+#: oslo_messaging/notify/dispatcher.py:105
+#, python-format
+msgid "Unknown priority \"%s\""
+msgstr ""
+

@@ -14,6 +14,8 @@
 
 import abc
 import logging
+import threading
+import time
 
 import six
 
@@ -49,7 +51,6 @@ class ConsumerBase(object):
     def cleanup(self):
         for socket in self.sockets:
             if not socket.handle.closed:
-                socket.setsockopt(zmq.LINGER, 0)
                 socket.close()
         self.sockets = []
 
@@ -74,8 +75,8 @@ class SingleSocketConsumer(ConsumerBase):
         except zmq.ZMQError as e:
             errmsg = _LE("Failed binding to port %(port)d: %(e)s")\
                 % (self.port, e)
-            LOG.error(_LE("Failed binding to port %(port)d: %(e)s")
-                      % (self.port, e))
+            LOG.error(_LE("Failed binding to port %(port)d: %(e)s"),
+                      (self.port, e))
             raise rpc_common.RPCException(errmsg)
 
     @property
@@ -85,3 +86,43 @@ class SingleSocketConsumer(ConsumerBase):
     @property
     def port(self):
         return self.socket.port
+
+
+class TargetsManager(object):
+
+    def __init__(self, conf, matchmaker, host, socket_type):
+        self.targets = []
+        self.conf = conf
+        self.matchmaker = matchmaker
+        self.host = host
+        self.socket_type = socket_type
+        self.targets_lock = threading.Lock()
+        self.updater = zmq_async.get_executor(method=self._update_targets) \
+            if conf.zmq_target_expire > 0 else None
+        if self.updater:
+            self.updater.execute()
+
+    def _update_targets(self):
+        with self.targets_lock:
+            for target in self.targets:
+                self.matchmaker.register(
+                    target, self.host,
+                    zmq_names.socket_type_str(self.socket_type))
+
+        # Update target-records once per half expiration time
+        time.sleep(self.conf.zmq_target_expire / 2)
+
+    def listen(self, target):
+        with self.targets_lock:
+            self.targets.append(target)
+            self.matchmaker.register(
+                target, self.host,
+                zmq_names.socket_type_str(self.socket_type))
+
+    def cleanup(self):
+        if self.updater:
+            self.updater.stop()
+        for target in self.targets:
+            self.matchmaker.unregister(
+                target, self.host,
+                zmq_names.socket_type_str(self.socket_type))
