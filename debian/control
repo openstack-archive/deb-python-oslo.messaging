@@ -88,7 +88,7 @@ Build-Depends-Indep: bandit,
                      python3-zmq,
                      subunit,
                      testrepository,
-Standards-Version: 3.9.6
+Standards-Version: 3.9.7
 Vcs-Browser: https://anonscm.debian.org/cgit/openstack/python-oslo.messaging.git/
 Vcs-Git: https://anonscm.debian.org/git/openstack/python-oslo.messaging.git
 Homepage: https://github.com/openstack/oslo.messaging
