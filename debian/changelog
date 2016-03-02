@@ -1,8 +1,12 @@
-python-oslo.messaging (4.0.0-2) UNRELEASED; urgency=medium
+python-oslo.messaging (4.5.0-1) experimental; urgency=medium
 
+  [ Ondřej Nový ]
   * Fixed VCS URLs (https).
 
- -- Ondřej Nový <novy@ondrej.org>  Sun, 28 Feb 2016 15:44:08 +0100
+  [ Thomas Goirand ]
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 02 Mar 2016 12:59:50 +0000
 
 python-oslo.messaging (4.0.0-1) experimental; urgency=medium
 
