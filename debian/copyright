@@ -2,10 +2,6 @@ Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: oslo.messaging
 Source: git://github.com/openstack/oslo.messaging.git
 
-Files: debian/*
-Copyright: (c) 2013, Thomas Goirand <zigo@debian.org>
-License: Apache-2
-
 Files: *
 Copyright: (c) 2011-2012 OpenStack Foundation.
            (c) 2012 Red Hat, Inc
@@ -19,6 +15,10 @@ Copyright: (c) 2011-2012 OpenStack Foundation.
            (c) 2012-2013, Russell Bryant <rbryant@redhat.com>
            (c) 2012-2013, Davanum Srinivas <dims@linux.vnet.ibm.com>
            (c) 2012-2013, Andreas Jaeger <aj@suse.de>
+License: Apache-2
+
+Files: debian/*
+Copyright: (c) 2013-2016, Thomas Goirand <zigo@debian.org>
 License: Apache-2
 
 License: Apache-2
