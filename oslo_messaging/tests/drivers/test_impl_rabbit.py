@@ -92,11 +92,11 @@ class TestHeartbeat(test_utils.BaseTestCase):
 
         if not heartbeat_side_effect:
             self.assertEqual(1, fake_ensure_connection.call_count)
-            self.assertEqual(3, fake_logger.debug.call_count)
+            self.assertEqual(2, fake_logger.debug.call_count)
             self.assertEqual(0, fake_logger.info.call_count)
         else:
             self.assertEqual(2, fake_ensure_connection.call_count)
-            self.assertEqual(3, fake_logger.debug.call_count)
+            self.assertEqual(2, fake_logger.debug.call_count)
             self.assertEqual(1, fake_logger.info.call_count)
             self.assertIn(mock.call(info, mock.ANY),
                           fake_logger.info.mock_calls)
@@ -191,11 +191,20 @@ class TestRabbitDriverLoadSSL(test_utils.BaseTestCase):
 
         transport._driver._get_connection()
         connection_klass.assert_called_once_with(
-            'memory:///', transport_options={'confirm_publish': True,
-                                             'on_blocked': mock.ANY,
-                                             'on_unblocked': mock.ANY},
+            'memory:///', transport_options={
+                'client_properties': {
+                    'capabilities': {
+                        'connection.blocked': True,
+                        'consumer_cancel_notify': True,
+                        'authentication_failure_close': True
+                    }
+                },
+                'confirm_publish': True,
+                'on_blocked': mock.ANY,
+                'on_unblocked': mock.ANY},
             ssl=self.expected, login_method='AMQPLAIN',
-            heartbeat=60, failover_strategy='round-robin')
+            heartbeat=60, failover_strategy='round-robin'
+        )
 
 
 class TestRabbitPublisher(test_utils.BaseTestCase):
