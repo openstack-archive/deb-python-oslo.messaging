@@ -1,3 +1,2 @@
 try-using-future-absolute-import.patch
 fixes-monkey_patch-call.patch
-remove-git-log-call-in-sphinx-doc.patch
