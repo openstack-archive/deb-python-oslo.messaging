@@ -23,6 +23,7 @@ __all__ = [
     'ServerListenError',
 ]
 
+import abc
 import functools
 import inspect
 import logging
@@ -32,8 +33,8 @@ import traceback
 from oslo_config import cfg
 from oslo_service import service
 from oslo_utils import eventletutils
-from oslo_utils import excutils
 from oslo_utils import timeutils
+import six
 from stevedore import driver
 
 from oslo_messaging._drivers import base as driver_base
@@ -295,6 +296,7 @@ def ordered(after=None, reset_after=None):
     return _ordered
 
 
+@six.add_metaclass(abc.ABCMeta)
 class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
     """Server for handling messages.
 
@@ -306,8 +308,8 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
     def __init__(self, transport, dispatcher, executor='blocking'):
         """Construct a message handling server.
 
-        The dispatcher parameter is a callable which is invoked with context
-        and message dictionaries each time a message is received.
+        The dispatcher parameter is a DispatcherBase instance which is used
+        for routing request to endpoint for processing.
 
         The executor parameter controls how incoming messages will be received
         and dispatched. By default, the most simple executor is used - the
@@ -315,8 +317,9 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
 
         :param transport: the messaging transport
         :type transport: Transport
-        :param dispatcher: a callable which is invoked for each method
-        :type dispatcher: callable
+        :param dispatcher: has a dispatch() method which is invoked for each
+                           incoming request
+        :type dispatcher: DispatcherBase
         :param executor: name of message executor - for example
                          'eventlet', 'blocking'
         :type executor: str
@@ -339,15 +342,30 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
         self._executor_cls = mgr.driver
 
         self._work_executor = None
-        self._poll_executor = None
 
         self._started = False
 
         super(MessageHandlingServer, self).__init__()
 
-    def _submit_work(self, callback):
-        fut = self._work_executor.submit(callback.run)
-        fut.add_done_callback(lambda f: callback.done())
+    def _on_incoming(self, incoming):
+        """Handles on_incoming event
+
+        :param incoming: incoming request.
+        """
+        self._work_executor.submit(self._process_incoming, incoming)
+
+    @abc.abstractmethod
+    def _process_incoming(self, incoming):
+        """Perform processing incoming request
+
+        :param incoming: incoming request.
+        """
+
+    @abc.abstractmethod
+    def _create_listener(self):
+        """Creates listener object for polling requests
+        :return: MessageListenerAdapter
+        """
 
     @ordered(reset_after='stop')
     def start(self, override_pool_size=None):
@@ -373,11 +391,6 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
                             'instantiate a new object.'))
         self._started = True
 
-        try:
-            self.listener = self.dispatcher._listen(self.transport)
-        except driver_base.TransportDriverError as ex:
-            raise ServerListenError(self.target, ex)
-
         executor_opts = {}
 
         if self.executor_type == "threading":
@@ -393,9 +406,13 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
             )
 
         self._work_executor = self._executor_cls(**executor_opts)
-        self._poll_executor = self._executor_cls(**executor_opts)
 
-        return lambda: self._poll_executor.submit(self._runner)
+        try:
+            self.listener = self._create_listener()
+        except driver_base.TransportDriverError as ex:
+            raise ServerListenError(self.target, ex)
+
+        self.listener.start(self._on_incoming)
 
     @ordered(after='start')
     def stop(self):
@@ -409,28 +426,6 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
         self.listener.stop()
         self._started = False
 
-    @excutils.forever_retry_uncaught_exceptions
-    def _runner(self):
-        while self._started:
-            incoming = self.listener.poll(
-                timeout=self.dispatcher.batch_timeout,
-                prefetch_size=self.dispatcher.batch_size)
-
-            if incoming:
-                self._submit_work(self.dispatcher(incoming))
-
-        # listener is stopped but we need to process all already consumed
-        # messages
-        while True:
-            incoming = self.listener.poll(
-                timeout=self.dispatcher.batch_timeout,
-                prefetch_size=self.dispatcher.batch_size)
-
-            if incoming:
-                self._submit_work(self.dispatcher(incoming))
-            else:
-                return
-
     @ordered(after='stop')
     def wait(self):
         """Wait for message processing to complete.
@@ -442,7 +437,6 @@ class MessageHandlingServer(service.ServiceBase, _OrderedTaskRunner):
         Once it's finished, the underlying driver resources associated to this
         server are released (like closing useless network connections).
         """
-        self._poll_executor.shutdown(wait=True)
         self._work_executor.shutdown(wait=True)
 
         # Close listener connection after processing all messages

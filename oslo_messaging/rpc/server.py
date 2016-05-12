@@ -102,8 +102,58 @@ __all__ = [
     'expected_exceptions',
 ]
 
+import logging
+import sys
+
+from oslo_messaging._i18n import _LE
 from oslo_messaging.rpc import dispatcher as rpc_dispatcher
 from oslo_messaging import server as msg_server
+
+LOG = logging.getLogger(__name__)
+
+
+class RPCServer(msg_server.MessageHandlingServer):
+    def __init__(self, transport, target, dispatcher, executor='blocking'):
+        super(RPCServer, self).__init__(transport, dispatcher, executor)
+        self._target = target
+
+    def _create_listener(self):
+        return self.transport._listen(self._target, 1, None)
+
+    def _process_incoming(self, incoming):
+        message = incoming[0]
+        try:
+            message.acknowledge()
+        except Exception:
+            LOG.exception(_LE("Can not acknowledge message. Skip processing"))
+            return
+
+        failure = None
+        try:
+            res = self.dispatcher.dispatch(message)
+        except rpc_dispatcher.ExpectedException as e:
+            LOG.debug(u'Expected exception during message handling (%s)',
+                      e.exc_info[1])
+            failure = e.exc_info
+        except Exception as e:
+            # current sys.exc_info() content can be overriden
+            # by another exception raise by a log handler during
+            # LOG.exception(). So keep a copy and delete it later.
+            failure = sys.exc_info()
+            LOG.exception(_LE('Exception during handling message'))
+
+        try:
+            if failure is None:
+                message.reply(res)
+            else:
+                message.reply(failure=failure)
+        except Exception:
+            LOG.exception(_LE("Can not send reply for message"))
+        finally:
+                # NOTE(dhellmann): Remove circular object reference
+                # between the current stack frame and the traceback in
+                # exc_info.
+                del failure
 
 
 def get_rpc_server(transport, target, endpoints,
@@ -129,8 +179,8 @@ def get_rpc_server(transport, target, endpoints,
     :param serializer: an optional entity serializer
     :type serializer: Serializer
     """
-    dispatcher = rpc_dispatcher.RPCDispatcher(target, endpoints, serializer)
-    return msg_server.MessageHandlingServer(transport, dispatcher, executor)
+    dispatcher = rpc_dispatcher.RPCDispatcher(endpoints, serializer)
+    return RPCServer(transport, target, dispatcher, executor)
 
 
 def expected_exceptions(*exceptions):

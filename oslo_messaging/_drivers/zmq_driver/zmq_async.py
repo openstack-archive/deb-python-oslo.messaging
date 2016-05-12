@@ -43,17 +43,6 @@ def get_poller(zmq_concurrency='eventlet'):
     return threading_poller.ThreadingPoller()
 
 
-def get_reply_poller(zmq_concurrency='eventlet'):
-    _raise_error_if_invalid_config_value(zmq_concurrency)
-
-    if zmq_concurrency == 'eventlet' and _is_eventlet_zmq_available():
-        from oslo_messaging._drivers.zmq_driver.poller import green_poller
-        return green_poller.HoldReplyPoller()
-
-    from oslo_messaging._drivers.zmq_driver.poller import threading_poller
-    return threading_poller.ThreadingPoller()
-
-
 def get_executor(method, zmq_concurrency='eventlet'):
     _raise_error_if_invalid_config_value(zmq_concurrency)
 
@@ -65,9 +54,9 @@ def get_executor(method, zmq_concurrency='eventlet'):
     return threading_poller.ThreadingExecutor(method)
 
 
-def get_proc_executor(method):
-    from oslo_messaging._drivers.zmq_driver import zmq_poller
-    return zmq_poller.MutliprocessingExecutor(method)
+def is_eventlet_concurrency(conf):
+    return _is_eventlet_zmq_available() and conf.rpc_zmq_concurrency == \
+        'eventlet'
 
 
 def _is_eventlet_zmq_available():

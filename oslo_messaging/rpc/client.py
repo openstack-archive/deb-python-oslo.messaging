@@ -121,8 +121,7 @@ class _CallContext(object):
         """Check to see if a version is compatible with the version cap."""
         version = self.target.version if version is self._marker else version
         return (not self.version_cap or
-                utils.version_is_compatible(self.version_cap,
-                                            self.target.version))
+                utils.version_is_compatible(self.version_cap, version))
 
     def cast(self, ctxt, method, **kwargs):
         """Invoke a method and return immediately. See RPCClient.cast()."""
@@ -356,9 +355,13 @@ class RPCClient(object):
         Similarly, the request context must be a dict unless the client's
         serializer supports serializing another type.
 
-        Note: cast doesn't ensure the remote method to be been executed
-        on each destination. But ensures that it will be not executed twice
-        on a destination.
+        Note: cast does not ensure that the remote method will be executed on
+        each destination. But it does ensure that the method will be not
+        executed twice on a destination (e.g. 'at-most-once' execution).
+
+        Note: there are no ordering guarantees across successive casts, even
+        among casts to the same destination. Therefore methods may be executed
+        in an order different from the order in which they are cast.
 
         :param ctxt: a request context dict
         :type ctxt: dict

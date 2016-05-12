@@ -42,6 +42,11 @@ services) is both ZeroMQ client and server. As a result, each host needs to
 listen to a certain TCP port for incoming connections and directly connect
 to other hosts simultaneously.
 
+Another option is to use a router proxy. It is not a broker because it
+doesn't assume any message ownership or persistence or replication etc. It
+performs only a redirection of messages to endpoints taking routing info from
+message envelope.
+
 Topics are used to identify the destination for a ZeroMQ RPC call. There are
 two types of topics, bare topics and directed topics. Bare topics look like
 'compute', while directed topics look like 'compute.machine1'.
@@ -66,9 +71,10 @@ Assuming the following systems as a goal.
           |  Keystone           |  |  Nova                  |
           |  Glance             |  |   nova-compute         |
           |  Neutron            |  |  Ceilometer            |
-          |  Cinder             |  |  Oslo-zmq-receiver     |
+          |  Cinder             |  |                        |
           |  Ceilometer         |  +------------------------+
-          |  Oslo-zmq-receiver  |
+          |  zmq-proxy          |
+          |  Redis              |
           |  Horizon            |
           +---------------------+
 
@@ -118,13 +124,13 @@ To specify the Redis server for RedisMatchMaker, use options in
         [matchmaker_redis]
         host = 127.0.0.1
         port = 6379
-        password = None
 
 In order to cleanup redis storage from expired records (e.g. target listener
 goes down) TTL may be applied for keys. Configure 'zmq_target_expire' option
 which is 120 (seconds) by default. The option is related not specifically to
 redis so it is also defined in [DEFAULT] section. If option value is <= 0
 then keys don't expire and live forever in the storage.
+
 
 MatchMaker Data Source (mandatory)
 ----------------------------------
@@ -138,16 +144,35 @@ stored in Redis is that the key is a base topic and the corresponding values are
 hostname arrays to be sent to.
 
 
-Proxy for fanout publishing
----------------------------
+Restrict the number of TCP sockets on controller
+------------------------------------------------
 
-Each machine running OpenStack services, or sending RPC messages, should run
-the 'oslo-messaging-zmq-broker' daemon.
+The most heavily used RPC pattern (CALL) may consume too many TCP sockets on
+controller node in directly connected configuration. To solve the issue
+ROUTER proxy may be used.
+
+In order to configure driver to use ROUTER proxy set up the 'use_router_proxy'
+option to true in [DEFAULT] section (false is set by default).
+
+For example::
+
+        use_router_proxy = true
+
+Not less than 3 proxies should be running on controllers or on stand alone
+nodes. The parameters for the script oslo-messaging-zmq-proxy should be::
+
+        oslo-messaging-zmq-proxy
+            --config-file /etc/oslo/zeromq.conf
+            --log-file /var/log/oslo/zmq-router-proxy.log
 
 Fanout-based patterns like CAST+Fanout and notifications always use proxy
-as they act over PUB/SUB, 'use_pub_sub' - defaults to True. If not using
-PUB/SUB (use_pub_sub = False) then fanout will be emulated over direct
-DEALER/ROUTER unicast which is possible but less efficient and therefore
+as they act over PUB/SUB, 'use_pub_sub' option defaults to true. In such case
+publisher proxy should be running. Actually proxy does both: routing to a
+DEALER endpoint for direct messages and publishing to all subscribers over
+zmq.PUB socket.
+
+If not using PUB/SUB (use_pub_sub = false) then fanout will be emulated over
+direct DEALER/ROUTER unicast which is possible but less efficient and therefore
 is not recommended. In a case of direct DEALER/ROUTER unicast proxy is not
 needed.
 
@@ -155,25 +180,14 @@ This option can be set in [DEFAULT] section.
 
 For example::
 
-        use_pub_sub = True
+        use_pub_sub = true
 
 
-In case of using the broker all publishers (clients) talk to servers over
-the local broker connecting to it via IPC transport.
-
-The IPC runtime directory, 'rpc_zmq_ipc_dir', can be set in [DEFAULT] section.
-
-For example::
-
-        rpc_zmq_ipc_dir = /var/run/openstack
-
-The parameters for the script oslo-messaging-zmq-receiver should be::
-
-        oslo-messaging-zmq-broker
-            --config-file /etc/oslo/zeromq.conf
-            --log-file /var/log/oslo/zmq-broker.log
+In case of using a proxy all publishers (clients) talk to servers over
+the proxy connecting to it via TCP.
 
 You can specify ZeroMQ options in /etc/oslo/zeromq.conf if necessary.
+
 
 Listening Address (optional)
 ----------------------------
@@ -216,12 +230,23 @@ For example::
 
     enable_plugin zmq https://github.com/openstack/devstack-plugin-zmq.git
 
+
+Example of local.conf::
+
+    [[local|localrc]]
+    DATABASE_PASSWORD=password
+    ADMIN_PASSWORD=password
+    SERVICE_PASSWORD=password
+    SERVICE_TOKEN=password
+
+    enable_plugin zmq https://github.com/openstack/devstack-plugin-zmq.git
+
+    OSLOMSG_REPO=https://review.openstack.org/openstack/oslo.messaging
+    OSLOMSG_BRANCH=master
+
+    ZEROMQ_MATCHMAKER=redis
+    LIBS_FROM_GIT=oslo.messaging
+    ENABLE_DEBUG_LOG_LEVEL=True
+
+
 .. _devstack-plugin-zmq: https://github.com/openstack/devstack-plugin-zmq.git
-
-
-Current Status
---------------
-
-The current development status of ZeroMQ driver is shown in `wiki`_.
-
-.. _wiki: https://wiki.openstack.org/ZeroMQ

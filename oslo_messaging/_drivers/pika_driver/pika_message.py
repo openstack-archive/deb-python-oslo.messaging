@@ -22,6 +22,7 @@ from concurrent import futures
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import importutils
+from oslo_utils import timeutils
 from pika import exceptions as pika_exceptions
 from pika import spec as pika_spec
 import pika_pool
@@ -31,6 +32,7 @@ import six
 
 import oslo_messaging
 from oslo_messaging._drivers import base
+from oslo_messaging._drivers.pika_driver import pika_commons as pika_drv_cmns
 from oslo_messaging._drivers.pika_driver import pika_exceptions as pika_drv_exc
 from oslo_messaging import _utils as utils
 from oslo_messaging import exceptions
@@ -195,7 +197,7 @@ class RpcPikaIncomingMessage(PikaIncomingMessage, base.RpcIncomingMessage):
 
         def on_exception(ex):
             if isinstance(ex, pika_drv_exc.ConnectionException):
-                LOG.warn(
+                LOG.warning(
                     "Connectivity related problem during reply sending. %s",
                     ex
                 )
@@ -213,11 +215,14 @@ class RpcPikaIncomingMessage(PikaIncomingMessage, base.RpcIncomingMessage):
         ) if self._pika_engine.rpc_reply_retry_attempts else None
 
         try:
-            reply_outgoing_message.send(
-                reply_q=self.reply_q,
-                expiration_time=self.expiration_time,
-                retrier=retrier
-            )
+            timeout = (None if self.expiration_time is None else
+                       max(self.expiration_time - time.time(), 0))
+            with timeutils.StopWatch(duration=timeout) as stopwatch:
+                reply_outgoing_message.send(
+                    reply_q=self.reply_q,
+                    stopwatch=stopwatch,
+                    retrier=retrier
+                )
             LOG.debug(
                 "Message [id:'%s'] replied to '%s'.", self.msg_id, self.reply_q
             )
@@ -276,7 +281,7 @@ class RpcReplyPikaIncomingMessage(PikaIncomingMessage):
 
                     res_exc = ex_type(module_name, class_name, message, trace)
                 except ImportError as e:
-                    LOG.warn(
+                    LOG.warning(
                         "Can not deserialize remote exception [module:%s, "
                         "class:%s]. %s", module_name, class_name, e
                     )
@@ -346,7 +351,7 @@ class PikaOutgoingMessage(object):
 
     @staticmethod
     def _publish(pool, exchange, routing_key, body, properties, mandatory,
-                 expiration_time):
+                 stopwatch):
         """Execute pika publish method using connection from connection pool
         Also this message catches all pika related exceptions and raise
         oslo.messaging specific exceptions
@@ -358,16 +363,15 @@ class PikaOutgoingMessage(object):
         :param properties: Properties, RabbitMQ message properties
         :param mandatory: Boolean, RabbitMQ publish mandatory flag (raise
             exception if it is not possible to deliver message to any queue)
-        :param expiration_time: Float, expiration time in seconds
-            (like time.time())
+        :param stopwatch: StopWatch, stopwatch object for calculating
+            allowed timeouts
         """
-        timeout = (None if expiration_time is None else
-                   expiration_time - time.time())
-        if timeout is not None and timeout < 0:
+        if stopwatch.expired():
             raise exceptions.MessagingTimeout(
                 "Timeout for current operation was expired."
             )
         try:
+            timeout = stopwatch.leftover(return_none=True)
             with pool.acquire(timeout=timeout) as conn:
                 if timeout is not None:
                     properties.expiration = str(int(timeout * 1000))
@@ -387,7 +391,7 @@ class PikaOutgoingMessage(object):
             )
         except pika_exceptions.UnroutableError as e:
             raise pika_drv_exc.RoutingException(
-                "Can not deliver message:[body:{}, properties: {}] to any"
+                "Can not deliver message:[body:{}, properties: {}] to any "
                 "queue using target: [exchange:{}, "
                 "routing_key:{}]. {}".format(
                     body, properties, exchange, routing_key, str(e)
@@ -422,7 +426,7 @@ class PikaOutgoingMessage(object):
 
     def _do_send(self, exchange, routing_key, msg_dict, msg_props,
                  confirm=True, mandatory=True, persistent=False,
-                 expiration_time=None, retrier=None):
+                 stopwatch=pika_drv_cmns.INFINITE_STOP_WATCH, retrier=None):
         """Send prepared message with configured retrying
 
         :param exchange: String, RabbitMQ exchange name for message sending
@@ -434,8 +438,8 @@ class PikaOutgoingMessage(object):
             exception if it is not possible to deliver message to any queue)
         :param persistent: Boolean, send persistent message if True, works only
             for routing into durable queues
-        :param expiration_time: Float, expiration time in seconds
-            (like time.time())
+        :param stopwatch: StopWatch, stopwatch object for calculating
+            allowed timeouts
         :param retrier: retrying.Retrier, configured retrier object for sending
             message, if None no retrying is performed
         """
@@ -458,10 +462,11 @@ class PikaOutgoingMessage(object):
                    retrier(self._publish))
 
         return publish(pool, exchange, routing_key, body, msg_props,
-                       mandatory, expiration_time)
+                       mandatory, stopwatch)
 
     def send(self, exchange, routing_key='', confirm=True, mandatory=True,
-             persistent=False, expiration_time=None, retrier=None):
+             persistent=False, stopwatch=pika_drv_cmns.INFINITE_STOP_WATCH,
+             retrier=None):
         """Send message with configured retrying
 
         :param exchange: String, RabbitMQ exchange name for message sending
@@ -471,16 +476,16 @@ class PikaOutgoingMessage(object):
             exception if it is not possible to deliver message to any queue)
         :param persistent: Boolean, send persistent message if True, works only
             for routing into durable queues
-        :param expiration_time: Float, expiration time in seconds
-            (like time.time())
+        :param stopwatch: StopWatch, stopwatch object for calculating
+            allowed timeouts
         :param retrier: retrying.Retrier, configured retrier object for sending
             message, if None no retrying is performed
         """
         msg_dict, msg_props = self._prepare_message_to_send()
 
         return self._do_send(exchange, routing_key, msg_dict, msg_props,
-                             confirm, mandatory, persistent, expiration_time,
-                             retrier)
+                             confirm, mandatory, persistent,
+                             stopwatch, retrier)
 
 
 class RpcPikaOutgoingMessage(PikaOutgoingMessage):
@@ -495,27 +500,19 @@ class RpcPikaOutgoingMessage(PikaOutgoingMessage):
         self.msg_id = None
         self.reply_q = None
 
-    def send(self, target, reply_listener=None, expiration_time=None,
-             retrier=None):
+    def send(self, exchange, routing_key, reply_listener=None,
+             stopwatch=pika_drv_cmns.INFINITE_STOP_WATCH, retrier=None):
         """Send RPC message with configured retrying
 
-        :param target: Target, oslo.messaging target which defines RPC service
+        :param exchange: String, RabbitMQ exchange name for message sending
+        :param routing_key: String, RabbitMQ routing key for message routing
         :param reply_listener: RpcReplyPikaListener, listener for waiting
             reply. If None - return immediately without reply waiting
-        :param expiration_time: Float, expiration time in seconds
-            (like time.time())
+        :param stopwatch: StopWatch, stopwatch object for calculating
+            allowed timeouts
         :param retrier: retrying.Retrier, configured retrier object for sending
             message, if None no retrying is performed
         """
-
-        exchange = self._pika_engine.get_rpc_exchange_name(
-            target.exchange, target.topic, target.fanout, retrier is None
-        )
-
-        queue = "" if target.fanout else self._pika_engine.get_rpc_queue_name(
-            target.topic, target.server, retrier is None
-        )
-
         msg_dict, msg_props = self._prepare_message_to_send()
 
         if reply_listener:
@@ -523,22 +520,19 @@ class RpcPikaOutgoingMessage(PikaOutgoingMessage):
             msg_props.correlation_id = self.msg_id
             LOG.debug('MSG_ID is %s', self.msg_id)
 
-            self.reply_q = reply_listener.get_reply_qname(
-                expiration_time - time.time()
-            )
+            self.reply_q = reply_listener.get_reply_qname()
             msg_props.reply_to = self.reply_q
 
             future = reply_listener.register_reply_waiter(msg_id=self.msg_id)
 
             self._do_send(
-                exchange=exchange, routing_key=queue, msg_dict=msg_dict,
+                exchange=exchange, routing_key=routing_key, msg_dict=msg_dict,
                 msg_props=msg_props, confirm=True, mandatory=True,
-                persistent=False, expiration_time=expiration_time,
-                retrier=retrier
+                persistent=False, stopwatch=stopwatch, retrier=retrier
             )
 
             try:
-                return future.result(expiration_time - time.time())
+                return future.result(stopwatch.leftover(return_none=True))
             except BaseException as e:
                 reply_listener.unregister_reply_waiter(self.msg_id)
                 if isinstance(e, futures.TimeoutError):
@@ -546,10 +540,9 @@ class RpcPikaOutgoingMessage(PikaOutgoingMessage):
                 raise e
         else:
             self._do_send(
-                exchange=exchange, routing_key=queue, msg_dict=msg_dict,
-                msg_props=msg_props, confirm=True, mandatory=not target.fanout,
-                persistent=False, expiration_time=expiration_time,
-                retrier=retrier
+                exchange=exchange, routing_key=routing_key, msg_dict=msg_dict,
+                msg_props=msg_props, confirm=True, mandatory=True,
+                persistent=False, stopwatch=stopwatch, retrier=retrier
             )
 
 
@@ -600,12 +593,13 @@ class RpcReplyPikaOutgoingMessage(PikaOutgoingMessage):
             pika_engine, msg, None, content_type, content_encoding
         )
 
-    def send(self, reply_q, expiration_time=None, retrier=None):
+    def send(self, reply_q, stopwatch=pika_drv_cmns.INFINITE_STOP_WATCH,
+             retrier=None):
         """Send RPC message with configured retrying
 
         :param reply_q: String, queue name for sending reply
-        :param expiration_time: Float, expiration time in seconds
-            (like time.time())
+        :param stopwatch: StopWatch, stopwatch object for calculating
+            allowed timeouts
         :param retrier: retrying.Retrier, configured retrier object for sending
             message, if None no retrying is performed
         """
@@ -616,6 +610,6 @@ class RpcReplyPikaOutgoingMessage(PikaOutgoingMessage):
         self._do_send(
             exchange=self._pika_engine.rpc_reply_exchange, routing_key=reply_q,
             msg_dict=msg_dict, msg_props=msg_props, confirm=True,
-            mandatory=True, persistent=False, expiration_time=expiration_time,
+            mandatory=True, persistent=False, stopwatch=stopwatch,
             retrier=retrier
         )

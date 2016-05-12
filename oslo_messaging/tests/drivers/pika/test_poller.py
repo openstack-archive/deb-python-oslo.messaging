@@ -12,9 +12,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import socket
+import threading
 import time
 import unittest
 
+from concurrent import futures
 import mock
 
 from oslo_messaging._drivers.pika_driver import pika_poller
@@ -31,14 +34,53 @@ class PikaPollerTestCase(unittest.TestCase):
         self._pika_engine.create_connection.return_value = (
             self._poller_connection_mock
         )
+
+        self._executor = futures.ThreadPoolExecutor(1)
+
+        def timer_task(timeout, callback):
+            time.sleep(timeout)
+            callback()
+
+        self._poller_connection_mock.add_timeout.side_effect = (
+            lambda *args: self._executor.submit(timer_task, *args)
+        )
+
         self._prefetch_count = 123
 
     @mock.patch("oslo_messaging._drivers.pika_driver.pika_poller.PikaPoller."
                 "_declare_queue_binding")
-    def test_poll(self, declare_queue_binding_mock):
+    def test_start(self, declare_queue_binding_mock):
+        poller = pika_poller.PikaPoller(
+            self._pika_engine, 1, None, self._prefetch_count, None
+        )
+
+        poller.start(None)
+
+        self.assertTrue(self._pika_engine.create_connection.called)
+        self.assertTrue(self._poller_connection_mock.channel.called)
+        self.assertTrue(declare_queue_binding_mock.called)
+
+    def test_start_when_connection_unavailable(self):
+        poller = pika_poller.PikaPoller(
+            self._pika_engine, 1, None, self._prefetch_count, None
+        )
+
+        self._pika_engine.create_connection.side_effect = socket.timeout()
+
+        # start() should not raise socket.timeout exception
+        poller.start(None)
+
+    @mock.patch("oslo_messaging._drivers.pika_driver.pika_poller.PikaPoller."
+                "_declare_queue_binding")
+    def test_message_processing(self, declare_queue_binding_mock):
+        res = []
+
+        def on_incoming_callback(incoming):
+            res.append(incoming)
+
         incoming_message_class_mock = mock.Mock()
         poller = pika_poller.PikaPoller(
-            self._pika_engine, self._prefetch_count,
+            self._pika_engine, 1, None, self._prefetch_count,
             incoming_message_class=incoming_message_class_mock
         )
         unused = object()
@@ -46,18 +88,14 @@ class PikaPollerTestCase(unittest.TestCase):
         properties = object()
         body = object()
 
-        self._poller_connection_mock.process_data_events.side_effect = (
-            lambda time_limit: poller._on_message_with_ack_callback(
-                unused, method, properties, body
-            )
+        poller.start(on_incoming_callback)
+        poller._on_message_with_ack_callback(
+            unused, method, properties, body
         )
-
-        poller.start()
-        res = poller.poll()
 
         self.assertEqual(len(res), 1)
 
-        self.assertEqual(res[0], incoming_message_class_mock.return_value)
+        self.assertEqual(res[0], [incoming_message_class_mock.return_value])
         incoming_message_class_mock.assert_called_once_with(
             self._pika_engine, self._poller_channel_mock, method, properties,
             body
@@ -70,92 +108,39 @@ class PikaPollerTestCase(unittest.TestCase):
 
     @mock.patch("oslo_messaging._drivers.pika_driver.pika_poller.PikaPoller."
                 "_declare_queue_binding")
-    def test_poll_after_stop(self, declare_queue_binding_mock):
+    def test_message_processing_batch(self, declare_queue_binding_mock):
         incoming_message_class_mock = mock.Mock()
-        poller = pika_poller.PikaPoller(
-            self._pika_engine, self._prefetch_count,
-            incoming_message_class=incoming_message_class_mock
-        )
 
         n = 10
         params = []
 
-        for i in range(n):
-            params.append((object(), object(), object(), object()))
+        res = []
 
-        def f(time_limit):
-            if poller._started:
-                for k in range(n):
-                    poller._on_message_no_ack_callback(
-                        *params[k]
-                    )
+        def on_incoming_callback(incoming):
+            res.append(incoming)
 
-        self._poller_connection_mock.process_data_events.side_effect = f
-
-        poller.start()
-        res = poller.poll(prefetch_size=1)
-        self.assertEqual(len(res), 1)
-        self.assertEqual(res[0], incoming_message_class_mock.return_value)
-        self.assertEqual(
-            incoming_message_class_mock.call_args_list[0][0],
-            (self._pika_engine, None) + params[0][1:]
-        )
-
-        poller.stop()
-
-        res2 = poller.poll(prefetch_size=n)
-
-        self.assertEqual(len(res2), n - 1)
-        self.assertEqual(incoming_message_class_mock.call_count, n)
-
-        self.assertEqual(
-            self._poller_connection_mock.process_data_events.call_count, 2)
-
-        for i in range(n - 1):
-            self.assertEqual(res2[i], incoming_message_class_mock.return_value)
-            self.assertEqual(
-                incoming_message_class_mock.call_args_list[i + 1][0],
-                (self._pika_engine, None) + params[i + 1][1:]
-            )
-
-        self.assertTrue(self._pika_engine.create_connection.called)
-        self.assertTrue(self._poller_connection_mock.channel.called)
-
-        self.assertTrue(declare_queue_binding_mock.called)
-
-    @mock.patch("oslo_messaging._drivers.pika_driver.pika_poller.PikaPoller."
-                "_declare_queue_binding")
-    def test_poll_batch(self, declare_queue_binding_mock):
-        incoming_message_class_mock = mock.Mock()
         poller = pika_poller.PikaPoller(
-            self._pika_engine, self._prefetch_count,
+            self._pika_engine, n, None, self._prefetch_count,
             incoming_message_class=incoming_message_class_mock
         )
 
-        n = 10
-        params = []
-
         for i in range(n):
             params.append((object(), object(), object(), object()))
 
-        index = [0]
+        poller.start(on_incoming_callback)
 
-        def f(time_limit):
+        for i in range(n):
             poller._on_message_with_ack_callback(
-                *params[index[0]]
+                *params[i]
             )
-            index[0] += 1
 
-        self._poller_connection_mock.process_data_events.side_effect = f
-
-        poller.start()
-        res = poller.poll(prefetch_size=n)
-
-        self.assertEqual(len(res), n)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(len(res[0]), 10)
         self.assertEqual(incoming_message_class_mock.call_count, n)
 
         for i in range(n):
-            self.assertEqual(res[i], incoming_message_class_mock.return_value)
+            self.assertEqual(res[0][i],
+                             incoming_message_class_mock.return_value)
             self.assertEqual(
                 incoming_message_class_mock.call_args_list[i][0],
                 (self._pika_engine, self._poller_channel_mock) + params[i][1:]
@@ -168,42 +153,48 @@ class PikaPollerTestCase(unittest.TestCase):
 
     @mock.patch("oslo_messaging._drivers.pika_driver.pika_poller.PikaPoller."
                 "_declare_queue_binding")
-    def test_poll_batch_with_timeout(self, declare_queue_binding_mock):
+    def test_message_processing_batch_with_timeout(self,
+                                                   declare_queue_binding_mock):
         incoming_message_class_mock = mock.Mock()
-        poller = pika_poller.PikaPoller(
-            self._pika_engine, self._prefetch_count,
-            incoming_message_class=incoming_message_class_mock
-        )
 
         n = 10
         timeout = 1
-        sleep_time = 0.2
+
+        res = []
+        evt = threading.Event()
+
+        def on_incoming_callback(incoming):
+            res.append(incoming)
+            evt.set()
+
+        poller = pika_poller.PikaPoller(
+            self._pika_engine, n, timeout, self._prefetch_count,
+            incoming_message_class=incoming_message_class_mock
+        )
+
         params = []
 
         success_count = 5
 
+        poller.start(on_incoming_callback)
+
         for i in range(n):
             params.append((object(), object(), object(), object()))
 
-        index = [0]
-
-        def f(time_limit):
-            time.sleep(sleep_time)
+        for i in range(success_count):
             poller._on_message_with_ack_callback(
-                *params[index[0]]
+                *params[i]
             )
-            index[0] += 1
 
-        self._poller_connection_mock.process_data_events.side_effect = f
+        self.assertTrue(evt.wait(timeout * 2))
 
-        poller.start()
-        res = poller.poll(prefetch_size=n, timeout=timeout)
-
-        self.assertEqual(len(res), success_count)
+        self.assertEqual(len(res), 1)
+        self.assertEqual(len(res[0]), success_count)
         self.assertEqual(incoming_message_class_mock.call_count, success_count)
 
         for i in range(success_count):
-            self.assertEqual(res[i], incoming_message_class_mock.return_value)
+            self.assertEqual(res[0][i],
+                             incoming_message_class_mock.return_value)
             self.assertEqual(
                 incoming_message_class_mock.call_args_list[i][0],
                 (self._pika_engine, self._poller_channel_mock) + params[i][1:]
@@ -228,15 +219,12 @@ class RpcServicePikaPollerTestCase(unittest.TestCase):
         )
 
         self._pika_engine.get_rpc_queue_name.side_effect = (
-            lambda topic, server, no_ack: "_".join(
-                [topic, str(server), str(no_ack)]
-            )
+            lambda topic, server, no_ack, worker=False:
+                "_".join([topic, str(server), str(no_ack), str(worker)])
         )
 
         self._pika_engine.get_rpc_exchange_name.side_effect = (
-            lambda exchange, topic, fanout, no_ack: "_".join(
-                [exchange, topic, str(fanout), str(no_ack)]
-            )
+            lambda exchange: exchange
         )
 
         self._prefetch_count = 123
@@ -248,20 +236,11 @@ class RpcServicePikaPollerTestCase(unittest.TestCase):
                 "RpcPikaIncomingMessage")
     def test_declare_rpc_queue_bindings(self, rpc_pika_incoming_message_mock):
         poller = pika_poller.RpcServicePikaPoller(
-            self._pika_engine, self._target, self._prefetch_count,
-        )
-        self._poller_connection_mock.process_data_events.side_effect = (
-            lambda time_limit: poller._on_message_with_ack_callback(
-                None, None, None, None
-            )
+            self._pika_engine, self._target, 1, None,
+            self._prefetch_count
         )
 
-        poller.start()
-        res = poller.poll()
-
-        self.assertEqual(len(res), 1)
-
-        self.assertEqual(res[0], rpc_pika_incoming_message_mock.return_value)
+        poller.start(None)
 
         self.assertTrue(self._pika_engine.create_connection.called)
         self.assertTrue(self._poller_connection_mock.channel.called)
@@ -277,52 +256,52 @@ class RpcServicePikaPollerTestCase(unittest.TestCase):
         declare_queue_binding_by_channel_mock.assert_has_calls((
             mock.call(
                 channel=self._poller_channel_mock, durable=False,
-                exchange="exchange_topic_False_True",
+                exchange="exchange",
                 exchange_type='direct',
-                queue="topic_None_True",
+                queue="topic_None_True_False",
                 queue_expiration=12345,
-                routing_key="topic_None_True"
+                routing_key="topic_None_True_False"
             ),
             mock.call(
                 channel=self._poller_channel_mock, durable=False,
-                exchange="exchange_topic_False_True",
+                exchange="exchange",
                 exchange_type='direct',
-                queue="topic_server_True",
+                queue="topic_server_True_False",
                 queue_expiration=12345,
-                routing_key="topic_server_True"
+                routing_key="topic_server_True_False"
             ),
             mock.call(
                 channel=self._poller_channel_mock, durable=False,
-                exchange="exchange_topic_True_True",
-                exchange_type='fanout',
-                queue="topic_server_True",
-                queue_expiration=12345,
-                routing_key=''
-            ),
-            mock.call(
-                channel=self._poller_channel_mock, durable=False,
-                exchange="exchange_topic_False_False",
+                exchange="exchange",
                 exchange_type='direct',
-                queue="topic_None_False",
+                queue="topic_server_True_True",
                 queue_expiration=12345,
-                routing_key="topic_None_False"
+                routing_key="topic_all_workers_True_False"
             ),
             mock.call(
                 channel=self._poller_channel_mock, durable=False,
-                exchange="exchange_topic_False_False",
+                exchange="exchange",
                 exchange_type='direct',
-                queue="topic_server_False",
+                queue="topic_None_False_False",
                 queue_expiration=12345,
-                routing_key="topic_server_False"
+                routing_key="topic_None_False_False"
             ),
             mock.call(
                 channel=self._poller_channel_mock, durable=False,
-                exchange="exchange_topic_True_False",
-                exchange_type='fanout',
-                queue="topic_server_False",
+                exchange="exchange",
+                exchange_type='direct',
+                queue="topic_server_False_False",
                 queue_expiration=12345,
-                routing_key=''
+                routing_key='topic_server_False_False'
             ),
+            mock.call(
+                channel=self._poller_channel_mock, durable=False,
+                exchange="exchange",
+                exchange_type='direct',
+                queue="topic_server_False_True",
+                queue_expiration=12345,
+                routing_key='topic_all_workers_False_False'
+            )
         ))
 
 
@@ -347,24 +326,14 @@ class RpcReplyServicePikaPollerTestCase(unittest.TestCase):
         self._pika_engine.rpc_queue_expiration = 12345
         self._pika_engine.rpc_reply_retry_attempts = 3
 
-    def test_start(self):
-        poller = pika_poller.RpcReplyPikaPoller(
-            self._pika_engine, self._exchange, self._queue,
-            self._prefetch_count,
-        )
-
-        poller.start()
-
-        self.assertTrue(self._pika_engine.create_connection.called)
-        self.assertTrue(self._poller_connection_mock.channel.called)
-
     def test_declare_rpc_reply_queue_binding(self):
         poller = pika_poller.RpcReplyPikaPoller(
-            self._pika_engine, self._exchange, self._queue,
+            self._pika_engine, self._exchange, self._queue, 1, None,
             self._prefetch_count,
         )
 
-        poller.start()
+        poller.start(None)
+        poller.stop()
 
         declare_queue_binding_by_channel_mock = (
             self._pika_engine.declare_queue_binding_by_channel
@@ -409,26 +378,13 @@ class NotificationPikaPollerTestCase(unittest.TestCase):
         )
         self._pika_engine.notification_persistence = object()
 
-    @mock.patch("oslo_messaging._drivers.pika_driver.pika_message."
-                "PikaIncomingMessage")
-    def test_declare_notification_queue_bindings_default_queue(
-            self, pika_incoming_message_mock):
+    def test_declare_notification_queue_bindings_default_queue(self):
         poller = pika_poller.NotificationPikaPoller(
-            self._pika_engine, self._target_and_priorities,
+            self._pika_engine, self._target_and_priorities, 1, None,
             self._prefetch_count, None
         )
-        self._poller_connection_mock.process_data_events.side_effect = (
-            lambda time_limit: poller._on_message_with_ack_callback(
-                None, None, None, None
-            )
-        )
 
-        poller.start()
-        res = poller.poll()
-
-        self.assertEqual(len(res), 1)
-
-        self.assertEqual(res[0], pika_incoming_message_mock.return_value)
+        poller.start(None)
 
         self.assertTrue(self._pika_engine.create_connection.called)
         self.assertTrue(self._poller_connection_mock.channel.called)
@@ -471,26 +427,13 @@ class NotificationPikaPollerTestCase(unittest.TestCase):
             )
         ))
 
-    @mock.patch("oslo_messaging._drivers.pika_driver.pika_message."
-                "PikaIncomingMessage")
-    def test_declare_notification_queue_bindings_custom_queue(
-            self, pika_incoming_message_mock):
+    def test_declare_notification_queue_bindings_custom_queue(self):
         poller = pika_poller.NotificationPikaPoller(
-            self._pika_engine, self._target_and_priorities,
+            self._pika_engine, self._target_and_priorities, 1, None,
             self._prefetch_count, "custom_queue_name"
         )
-        self._poller_connection_mock.process_data_events.side_effect = (
-            lambda time_limit: poller._on_message_with_ack_callback(
-                None, None, None, None
-            )
-        )
 
-        poller.start()
-        res = poller.poll()
-
-        self.assertEqual(len(res), 1)
-
-        self.assertEqual(res[0], pika_incoming_message_mock.return_value)
+        poller.start(None)
 
         self.assertTrue(self._pika_engine.create_connection.called)
         self.assertTrue(self._poller_connection_mock.channel.called)

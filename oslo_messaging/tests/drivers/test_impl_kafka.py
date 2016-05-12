@@ -203,8 +203,30 @@ class TestKafkaListener(test_utils.BaseTestCase):
     def test_create_listener(self, fake_consumer, fake_ensure_connection):
         fake_target = oslo_messaging.Target(topic='fake_topic')
         fake_targets_and_priorities = [(fake_target, 'info')]
-        self.driver.listen_for_notifications(fake_targets_and_priorities)
+        self.driver.listen_for_notifications(fake_targets_and_priorities, None,
+                                             None, None)
         self.assertEqual(1, len(fake_consumer.mock_calls))
+
+    @mock.patch.object(kafka_driver.Connection, '_ensure_connection')
+    @mock.patch.object(kafka_driver.Connection, 'declare_topic_consumer')
+    def test_converting_targets_to_topics(self, fake_consumer,
+                                          fake_ensure_connection):
+        fake_targets_and_priorities = [
+            (oslo_messaging.Target(topic="fake_topic",
+                                   exchange="test1"), 'info'),
+            (oslo_messaging.Target(topic="fake_topic",
+                                   exchange="test2"), 'info'),
+            (oslo_messaging.Target(topic="fake_topic",
+                                   exchange="test1"), 'error'),
+            (oslo_messaging.Target(topic="fake_topic",
+                                   exchange="test3"), 'error'),
+        ]
+        self.driver.listen_for_notifications(fake_targets_and_priorities, None,
+                                             None, None)
+        self.assertEqual(1, len(fake_consumer.mock_calls))
+        fake_consumer.assert_called_once_with(set(['fake_topic.error',
+                                                   'fake_topic.info']),
+                                              None)
 
     @mock.patch.object(kafka_driver.Connection, '_ensure_connection')
     @mock.patch.object(kafka_driver.Connection, 'declare_topic_consumer')
@@ -212,7 +234,7 @@ class TestKafkaListener(test_utils.BaseTestCase):
         fake_target = oslo_messaging.Target(topic='fake_topic')
         fake_targets_and_priorities = [(fake_target, 'info')]
         listener = self.driver.listen_for_notifications(
-            fake_targets_and_priorities)
+            fake_targets_and_priorities, None, None, None)._poll_style_listener
         listener.conn.consume = mock.MagicMock()
         listener.conn.consume.return_value = (
             iter([kafka.common.KafkaMessage(
@@ -244,7 +266,7 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
         targets_and_priorities = [(target, 'fake_info')]
 
         listener = self.driver.listen_for_notifications(
-            targets_and_priorities)
+            targets_and_priorities, None, None, None)._poll_style_listener
         fake_context = {"fake_context_key": "fake_context_value"}
         fake_message = {"fake_message_key": "fake_message_value"}
         self.driver.send_notification(
@@ -261,7 +283,7 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
         targets_and_priorities = [(target, 'fake_info')]
 
         listener = self.driver.listen_for_notifications(
-            targets_and_priorities)
+            targets_and_priorities, None, None, None)._poll_style_listener
         fake_context = {"fake_context_key": "fake_context_value"}
         fake_message = {"fake_message_key": "fake_message_value"}
         self.driver.send_notification(
@@ -279,9 +301,9 @@ class TestWithRealKafkaBroker(test_utils.BaseTestCase):
         targets_and_priorities = [(target, 'fake_info')]
 
         listener = self.driver.listen_for_notifications(
-            targets_and_priorities)
+            targets_and_priorities, None, None, None)._poll_style_listener
 
         deadline = time.time() + 3
-        received_message = listener.poll(timeout=3)
+        received_message = listener.poll(batch_timeout=3)
         self.assertEqual(0, int(deadline - time.time()))
         self.assertEqual([], received_message)

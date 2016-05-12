@@ -17,7 +17,6 @@ import logging
 from oslo_messaging._drivers import base
 from oslo_messaging._drivers.zmq_driver.server.consumers\
     import zmq_consumer_base
-from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_names
 from oslo_messaging._i18n import _LE, _LI
@@ -46,20 +45,7 @@ class PullConsumer(zmq_consumer_base.SingleSocketConsumer):
 
     def __init__(self, conf, poller, server):
         super(PullConsumer, self).__init__(conf, poller, server, zmq.PULL)
-        self.matchmaker = server.matchmaker
-        self.host = zmq_address.combine_address(self.conf.rpc_zmq_host,
-                                                self.port)
-        self.targets = zmq_consumer_base.TargetsManager(
-            conf, self.matchmaker, self.host, zmq.PULL)
         LOG.info(_LI("[%s] Run PULL consumer"), self.host)
-
-    def listen(self, target):
-        LOG.info(_LI("Listen to target %s"), str(target))
-        self.targets.listen(target)
-
-    def cleanup(self):
-        super(PullConsumer, self).cleanup()
-        self.targets.cleanup()
 
     def receive_message(self, socket):
         try:
@@ -79,5 +65,5 @@ class PullConsumer(zmq_consumer_base.SingleSocketConsumer):
             else:
                 LOG.error(_LE("Unknown message type: %s"), msg_type)
 
-        except zmq.ZMQError as e:
+        except (zmq.ZMQError, AssertionError) as e:
             LOG.error(_LE("Receiving message failed: %s"), str(e))

@@ -13,18 +13,18 @@
 #    under the License.
 
 import logging
-import threading
 
 from concurrent import futures
 import futurist
 
 import oslo_messaging
 from oslo_messaging._drivers import common as rpc_common
+from oslo_messaging._drivers.zmq_driver.client.publishers.dealer \
+    import zmq_reply_waiter
 from oslo_messaging._drivers.zmq_driver.client.publishers \
     import zmq_publisher_base
 from oslo_messaging._drivers.zmq_driver import zmq_async
-from oslo_messaging._drivers.zmq_driver import zmq_names
-from oslo_messaging._i18n import _LW
+from oslo_messaging._i18n import _LE
 
 LOG = logging.getLogger(__name__)
 
@@ -38,43 +38,39 @@ class DealerCallPublisher(object):
         instead of ReqPublisher.
     """
 
-    def __init__(self, conf, matchmaker):
+    def __init__(self, conf, matchmaker, sockets_manager, sender=None,
+                 reply_waiter=None):
         super(DealerCallPublisher, self).__init__()
         self.conf = conf
         self.matchmaker = matchmaker
-        self.reply_waiter = ReplyWaiter(conf)
-        sockets_manager = zmq_publisher_base.SocketsManager(
-            conf, matchmaker, zmq.ROUTER, zmq.DEALER)
-
-        def _do_send_request(socket, request):
-            #  DEALER socket specific envelope empty delimiter
-            socket.send(b'', zmq.SNDMORE)
-            socket.send_pyobj(request)
-
-            LOG.debug("Sent message_id %(message)s to a target %(target)s",
-                      {"message": request.message_id,
-                       "target": request.target})
-
-        self.sender = CallSender(sockets_manager, _do_send_request,
-                                 self.reply_waiter)
+        self.reply_waiter = reply_waiter or zmq_reply_waiter.ReplyWaiter(conf)
+        self.sockets_manager = sockets_manager
+        self.sender = sender or CallSender(self.sockets_manager,
+                                           self.reply_waiter)
 
     def send_request(self, request):
         reply_future = self.sender.send_request(request)
         try:
             reply = reply_future.result(timeout=request.timeout)
+            LOG.debug("Received reply %s", request.message_id)
+        except AssertionError:
+            LOG.error(_LE("Message format error in reply %s"),
+                      request.message_id)
+            return None
         except futures.TimeoutError:
             raise oslo_messaging.MessagingTimeout(
-                "Timeout %s seconds was reached" % request.timeout)
+                "Timeout %(tout)s seconds was reached for message %(id)s" %
+                {"tout": request.timeout,
+                 "id": request.message_id})
         finally:
             self.reply_waiter.untrack_id(request.message_id)
 
-        LOG.debug("Received reply %s", reply)
-        if reply[zmq_names.FIELD_FAILURE]:
+        if reply.failure:
             raise rpc_common.deserialize_remote_exception(
-                reply[zmq_names.FIELD_FAILURE],
+                reply.failure,
                 request.allowed_remote_exmods)
         else:
-            return reply[zmq_names.FIELD_REPLY]
+            return reply.reply_body
 
     def cleanup(self):
         self.reply_waiter.cleanup()
@@ -83,10 +79,22 @@ class DealerCallPublisher(object):
 
 class CallSender(zmq_publisher_base.QueuedSender):
 
-    def __init__(self, sockets_manager, _do_send_request, reply_waiter):
-        super(CallSender, self).__init__(sockets_manager, _do_send_request)
+    def __init__(self, sockets_manager, reply_waiter):
+        super(CallSender, self).__init__(sockets_manager,
+                                         self._do_send_request)
         assert reply_waiter, "Valid ReplyWaiter expected!"
         self.reply_waiter = reply_waiter
+
+    def _do_send_request(self, socket, request):
+        envelope = request.create_envelope()
+        # DEALER socket specific envelope empty delimiter
+        socket.send(b'', zmq.SNDMORE)
+        socket.send_pyobj(envelope, zmq.SNDMORE)
+        socket.send_pyobj(request)
+
+        LOG.debug("Sent message_id %(message)s to a target %(target)s",
+                  {"message": request.message_id,
+                   "target": request.target})
 
     def send_request(self, request):
         reply_future = futurist.Future()
@@ -98,49 +106,3 @@ class CallSender(zmq_publisher_base.QueuedSender):
         socket = self.outbound_sockets.get_socket(target)
         self.reply_waiter.poll_socket(socket)
         return socket
-
-
-class ReplyWaiter(object):
-
-    def __init__(self, conf):
-        self.conf = conf
-        self.replies = {}
-        self.poller = zmq_async.get_poller()
-        self.executor = zmq_async.get_executor(self.run_loop)
-        self.executor.execute()
-        self._lock = threading.Lock()
-
-    def track_reply(self, reply_future, message_id):
-        self._lock.acquire()
-        self.replies[message_id] = reply_future
-        self._lock.release()
-
-    def untrack_id(self, message_id):
-        self._lock.acquire()
-        self.replies.pop(message_id)
-        self._lock.release()
-
-    def poll_socket(self, socket):
-
-        def _receive_method(socket):
-            empty = socket.recv()
-            assert empty == b'', "Empty expected!"
-            reply = socket.recv_pyobj()
-            LOG.debug("Received reply %s", reply)
-            return reply
-
-        self.poller.register(socket, recv_method=_receive_method)
-
-    def run_loop(self):
-        reply, socket = self.poller.poll(
-            timeout=self.conf.rpc_poll_timeout)
-        if reply is not None:
-            reply_id = reply[zmq_names.FIELD_MSG_ID]
-            call_future = self.replies.get(reply_id)
-            if call_future:
-                call_future.set_result(reply)
-            else:
-                LOG.warning(_LW("Received timed out reply: %s"), reply_id)
-
-    def cleanup(self):
-        self.poller.close()

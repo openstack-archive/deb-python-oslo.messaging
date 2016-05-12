@@ -13,7 +13,6 @@
 #    under the License.
 
 import logging
-import threading
 import uuid
 
 import six
@@ -34,12 +33,11 @@ zmq = zmq_async.import_zmq()
 
 class SubIncomingMessage(base.RpcIncomingMessage):
 
-    def __init__(self, request, socket, poller):
+    def __init__(self, request, socket):
         super(SubIncomingMessage, self).__init__(
             request.context, request.message)
         self.socket = socket
         self.msg_id = request.message_id
-        poller.resume_polling(socket)
 
     def reply(self, reply=None, failure=None, log_failure=True):
         """Reply is not needed for non-call messages."""
@@ -56,49 +54,38 @@ class SubConsumer(zmq_consumer_base.ConsumerBase):
     def __init__(self, conf, poller, server):
         super(SubConsumer, self).__init__(conf, poller, server)
         self.matchmaker = server.matchmaker
-        self.subscriptions = set()
-        self.targets = []
-        self._socket_lock = threading.Lock()
+        self.target = server.target
         self.socket = zmq_socket.ZmqSocket(self.conf, self.context, zmq.SUB)
         self.sockets.append(self.socket)
         self.id = uuid.uuid4()
-        self.publishers_poller = MatchmakerPoller(
-            self.matchmaker, on_result=self.on_publishers)
-
-    def _subscribe_on_target(self, target):
-        topic_filter = zmq_address.target_to_subscribe_filter(target)
-        if target.topic:
-            self.socket.setsockopt(zmq.SUBSCRIBE, six.b(target.topic))
-            self.subscriptions.add(six.b(target.topic))
-        if target.server:
-            self.socket.setsockopt(zmq.SUBSCRIBE, six.b(target.server))
-            self.subscriptions.add(six.b(target.server))
-        if target.topic and target.server:
-            self.socket.setsockopt(zmq.SUBSCRIBE, topic_filter)
-            self.subscriptions.add(topic_filter)
-
-        LOG.debug("[%(host)s] Subscribing to topic %(filter)s",
-                  {"host": self.id, "filter": topic_filter})
+        self._subscribe_on_target(self.target)
+        self.on_publishers(self.matchmaker.get_publishers())
+        self.poller.register(self.socket, self.receive_message)
 
     def on_publishers(self, publishers):
-        with self._socket_lock:
-            for host, sync in publishers:
-                self.socket.connect(zmq_address.get_tcp_direct_address(host))
-
-            self.poller.register(self.socket, self.receive_message)
+        for host, sync in publishers:
+            self.socket.connect(zmq_address.get_tcp_direct_address(host))
         LOG.debug("[%s] SUB consumer connected to publishers %s",
                   self.id, publishers)
 
-    def listen(self, target):
-        LOG.debug("Listen to target %s", target)
-        with self._socket_lock:
-            self._subscribe_on_target(target)
+    def _subscribe_on_target(self, target):
+        # NOTE(ozamiatin): No locks needed here, because this is called
+        # before the async updater loop started
+        topic_filter = zmq_address.target_to_subscribe_filter(target)
+        if target.topic:
+            self.socket.setsockopt(zmq.SUBSCRIBE, six.b(target.topic))
+        if target.server:
+            self.socket.setsockopt(zmq.SUBSCRIBE, six.b(target.server))
+        if target.topic and target.server:
+            self.socket.setsockopt(zmq.SUBSCRIBE, topic_filter)
+
+        LOG.debug("[%(host)s] Subscribing to topic %(filter)s",
+                  {"host": self.id, "filter": topic_filter})
 
     def _receive_request(self, socket):
         topic_filter = socket.recv()
         LOG.debug("[%(id)s] Received %(topic_filter)s topic",
                   {'id': self.id, 'topic_filter': topic_filter})
-        assert topic_filter in self.subscriptions
         request = socket.recv_pyobj()
         return request
 
@@ -115,42 +102,9 @@ class SubConsumer(zmq_consumer_base.ConsumerBase):
             if request.msg_type not in zmq_names.MULTISEND_TYPES:
                 LOG.error(_LE("Unknown message type: %s"), request.msg_type)
             else:
-                return SubIncomingMessage(request, socket, self.poller)
-        except zmq.ZMQError as e:
+                return SubIncomingMessage(request, socket)
+        except (zmq.ZMQError, AssertionError) as e:
             LOG.error(_LE("Receiving message failed: %s"), str(e))
 
-
-class MatchmakerPoller(object):
-    """This entity performs periodical async polling
-    to the matchmaker if no hosts were registered for
-    specified target before.
-    """
-
-    def __init__(self, matchmaker, on_result):
-        self.matchmaker = matchmaker
-        self.executor = zmq_async.get_executor(
-            method=self._poll_for_publishers)
-        self.on_result = on_result
-        self.executor.execute()
-
-    def _poll_for_publishers(self):
-        publishers = self.matchmaker.get_publishers()
-        if publishers:
-            self.on_result(publishers)
-            self.executor.done()
-
-
-class BackChatter(object):
-
-    def __init__(self, conf, context):
-        self.socket = zmq_socket.ZmqSocket(conf, context, zmq.PUSH)
-
-    def connect(self, address):
-        self.socket.connect(address)
-
-    def send_ready(self):
-        for i in range(self.socket.connections_count()):
-            self.socket.send(zmq_names.ACK_TYPE)
-
-    def close(self):
-        self.socket.close()
+    def cleanup(self):
+        super(SubConsumer, self).cleanup()

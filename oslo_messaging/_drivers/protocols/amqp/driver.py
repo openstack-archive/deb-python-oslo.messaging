@@ -25,6 +25,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 
 from oslo_serialization import jsonutils
 from oslo_utils import importutils
@@ -144,11 +145,12 @@ class Queue(object):
             self._pop_wake_condition.notify_all()
 
 
-class ProtonListener(base.Listener):
+class ProtonListener(base.PollStyleListener):
     def __init__(self, driver):
         super(ProtonListener, self).__init__(driver.prefetch_size)
         self.driver = driver
         self.incoming = Queue()
+        self.id = uuid.uuid4().hex
 
     def stop(self):
         self.incoming.stop()
@@ -197,19 +199,28 @@ class ProtonDriver(base.BaseDriver):
         """
         def wrap(self, *args, **kws):
             with self._lock:
+                # check to see if a fork was done after the Controller and its
+                # I/O thread was spawned.  old_pid will be None the first time
+                # this is called which will cause the Controller to be created.
                 old_pid = self._pid
                 self._pid = os.getpid()
 
-            if old_pid != self._pid:
-                if self._ctrl is not None:
-                    LOG.warning(_LW("Process forked after connection "
-                                    "established!"))
-                    self._ctrl.shutdown(wait=False)
-                # Create a Controller that connects to the messaging service:
-                self._ctrl = controller.Controller(self._hosts,
-                                                   self._default_exchange,
-                                                   self._conf)
-                self._ctrl.connect()
+                if old_pid != self._pid:
+                    if self._ctrl is not None:
+                        # fork was called after the Controller was created, and
+                        # we are now executing as the child process.  Do not
+                        # touch the existing Controller - it is owned by the
+                        # parent.  Best we can do here is simply drop it and
+                        # hope we get lucky.
+                        LOG.warning(_LW("Process forked after connection "
+                                        "established!"))
+                        self._ctrl = None
+                    # Create a Controller that connects to the messaging
+                    # service:
+                    self._ctrl = controller.Controller(self._hosts,
+                                                       self._default_exchange,
+                                                       self._conf)
+                    self._ctrl.connect()
             return func(self, *args, **kws)
         return wrap
 
@@ -222,7 +233,6 @@ class ProtonDriver(base.BaseDriver):
         if retry is not None:
             raise NotImplementedError('"retry" not implemented by '
                                       'this transport driver')
-
         request = marshal_request(message, ctxt, envelope)
         expire = 0
         if timeout:
@@ -235,14 +245,16 @@ class ProtonDriver(base.BaseDriver):
         self._ctrl.add_task(task)
         # wait for the eventloop to process the command. If the command is
         # an RPC call retrieve the reply message
-        reply = task.wait(timeout)
-        if reply:
-            # TODO(kgiusti) how to handle failure to un-marshal?  Must log, and
-            # determine best way to communicate this failure back up to the
-            # caller
-            reply = unmarshal_response(reply, self._allowed_remote_exmods)
-        LOG.debug("Send to %s returning", target)
-        return reply
+
+        if wait_for_reply:
+            reply = task.wait(timeout)
+            if reply:
+                # TODO(kgiusti) how to handle failure to un-marshal?
+                # Must log, and determine best way to communicate this failure
+                # back up to the caller
+                reply = unmarshal_response(reply, self._allowed_remote_exmods)
+            LOG.debug("Send to %s returning", target)
+            return reply
 
     @_ensure_connect_called
     def send_notification(self, target, ctxt, message, version,
@@ -255,15 +267,18 @@ class ProtonDriver(base.BaseDriver):
         return self.send(target, ctxt, message, envelope=(version == 2.0))
 
     @_ensure_connect_called
-    def listen(self, target):
+    def listen(self, target, batch_size, batch_timeout):
         """Construct a Listener for the given target."""
         LOG.debug("Listen to %s", target)
         listener = ProtonListener(self)
         self._ctrl.add_task(drivertasks.ListenTask(target, listener))
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
         return listener
 
     @_ensure_connect_called
-    def listen_for_notifications(self, targets_and_priorities, pool):
+    def listen_for_notifications(self, targets_and_priorities, pool,
+                                 batch_size, batch_timeout):
         LOG.debug("Listen for notifications %s", targets_and_priorities)
         if pool:
             raise NotImplementedError('"pool" not implemented by '
@@ -273,7 +288,8 @@ class ProtonDriver(base.BaseDriver):
             topic = '%s.%s' % (target.topic, priority)
             t = messaging_target.Target(topic=topic)
             self._ctrl.add_task(drivertasks.ListenTask(t, listener, True))
-        return listener
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
 
     def cleanup(self):
         """Release all resources."""

@@ -61,15 +61,17 @@ def pack_context_with_message(ctxt, msg):
     return {'message': msg, 'context': context_d}
 
 
-def target_to_topic(target):
+def target_to_topic(target, priority=None):
     """Convert target into topic string
 
     :param target: Message destination target
     :type target: oslo_messaging.Target
+    :param priority: Notification priority
+    :type priority: string
     """
-    if target.exchange is None:
+    if not priority:
         return target.topic
-    return "%s_%s" % (target.exchange, target.topic)
+    return target.topic + '.' + priority
 
 
 class Connection(object):
@@ -185,12 +187,8 @@ class Connection(object):
 
     def reset(self):
         """Reset a connection so it can be used again."""
-        if self.kafka_client:
-            self.kafka_client.close()
-        self.kafka_client = None
-        if self.producer:
-            self.producer.stop()
-        self.producer = None
+        if self.consumer:
+            self.consumer.close()
         self.consumer = None
 
     def close(self):
@@ -224,10 +222,14 @@ class Connection(object):
             self.kafka_client = None
 
     def declare_topic_consumer(self, topics, group=None):
+        self._ensure_connection()
+        for topic in topics:
+            self.kafka_client.ensure_topic_exists(topic)
         self.consumer = kafka.KafkaConsumer(
             *topics, group_id=group,
             bootstrap_servers=["%s:%s" % (self.host, str(self.port))],
             fetch_message_max_bytes=self.fetch_messages_max_bytes)
+        self._consume_loop_stopped = False
 
 
 class OsloKafkaMessage(base.RpcIncomingMessage):
@@ -242,7 +244,7 @@ class OsloKafkaMessage(base.RpcIncomingMessage):
         LOG.warning(_LW("reply is not supported"))
 
 
-class KafkaListener(base.Listener):
+class KafkaListener(base.PollStyleListener):
 
     def __init__(self, conn):
         super(KafkaListener, self).__init__()
@@ -337,7 +339,8 @@ class KafkaDriver(base.BaseDriver):
         raise NotImplementedError(
             'The RPC implementation for Kafka is not implemented')
 
-    def listen_for_notifications(self, targets_and_priorities, pool=None):
+    def listen_for_notifications(self, targets_and_priorities, pool,
+                                 batch_size, batch_timeout):
         """Listen to a specified list of targets on Kafka brokers
 
         :param targets_and_priorities: List of pairs (target, priority)
@@ -349,14 +352,15 @@ class KafkaDriver(base.BaseDriver):
         :type pool: string
         """
         conn = self._get_connection(purpose=PURPOSE_LISTEN)
-        topics = []
+        topics = set()
         for target, priority in targets_and_priorities:
-            topics.append(target_to_topic(target))
+            topics.add(target_to_topic(target, priority))
 
         conn.declare_topic_consumer(topics, pool)
 
         listener = KafkaListener(conn)
-        return listener
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
 
     def _get_connection(self, purpose):
         return driver_common.ConnectionContext(self.connection_pool, purpose)

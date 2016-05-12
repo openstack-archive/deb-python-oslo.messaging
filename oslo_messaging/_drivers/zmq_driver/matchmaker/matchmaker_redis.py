@@ -45,18 +45,19 @@ matchmaker_redis_opts = [
                default='oslo-messaging-zeromq',
                help='Redis replica set name.'),
     cfg.IntOpt('wait_timeout',
-               default=500,
+               default=5000,
                help='Time in ms to wait between connection attempts.'),
     cfg.IntOpt('check_timeout',
-               default=20000,
+               default=60000,
                help='Time in ms to wait before the transaction is killed.'),
     cfg.IntOpt('socket_timeout',
-               default=1000,
+               default=10000,
                help='Timeout in ms on blocking socket operations'),
 ]
 
 _PUBLISHERS_KEY = "PUBLISHERS"
-_RETRY_METHODS = ("get_hosts", "get_publishers")
+_ROUTERS_KEY = "ROUTERS"
+_RETRY_METHODS = ("get_hosts", "get_publishers", "get_routers")
 
 
 def retry_if_connection_error(ex):
@@ -143,6 +144,15 @@ class RedisMatchMaker(base.MatchMakerBase):
                       for host_str in
                       self._get_hosts_by_key(_PUBLISHERS_KEY)])
         return hosts
+
+    def register_router(self, hostname):
+        self._redis.sadd(_ROUTERS_KEY, hostname)
+
+    def unregister_router(self, hostname):
+        self._redis.srem(_ROUTERS_KEY, hostname)
+
+    def get_routers(self):
+        return self._get_hosts_by_key(_ROUTERS_KEY)
 
     def _get_hosts_by_key(self, key):
         return self._redis.smembers(key)

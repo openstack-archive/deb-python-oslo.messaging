@@ -37,6 +37,7 @@ from oslo_messaging import exceptions
 
 _transport_opts = [
     cfg.StrOpt('transport_url',
+               secret=True,
                help='A URL representing the messaging driver to use and its '
                     'full configuration. If not set, we fall back to the '
                     'rpc_backend option and driver specific configuration.'),
@@ -96,21 +97,24 @@ class Transport(object):
         self._driver.send_notification(target, ctxt, message, version,
                                        retry=retry)
 
-    def _listen(self, target):
+    def _listen(self, target, batch_size, batch_timeout):
         if not (target.topic and target.server):
             raise exceptions.InvalidTarget('A server\'s target must have '
                                            'topic and server names specified',
                                            target)
-        return self._driver.listen(target)
+        return self._driver.listen(target, batch_size,
+                                   batch_timeout)
 
-    def _listen_for_notifications(self, targets_and_priorities, pool):
+    def _listen_for_notifications(self, targets_and_priorities, pool,
+                                  batch_size, batch_timeout):
         for target, priority in targets_and_priorities:
             if not target.topic:
                 raise exceptions.InvalidTarget('A target must have '
                                                'topic specified',
                                                target)
         return self._driver.listen_for_notifications(
-            targets_and_priorities, pool)
+            targets_and_priorities, pool, batch_size, batch_timeout
+        )
 
     def cleanup(self):
         """Release all resources associated with this transport."""

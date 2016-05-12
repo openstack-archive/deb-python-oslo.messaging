@@ -14,6 +14,7 @@
 
 import collections
 import contextlib
+import errno
 import functools
 import itertools
 import os
@@ -351,7 +352,7 @@ class ConnectionLock(DummyConnectionLock):
     starvation when the driver sends a lot of messages.
 
     So when lock.heartbeat_acquire() is called next time the lock
-    is released(), the caller unconditionnaly acquires
+    is released(), the caller unconditionally acquires
     the lock, even someone else have asked for the lock before it.
     """
 
@@ -868,10 +869,18 @@ class Connection(object):
             LOG.debug('Failed to get socket attribute: %s' % str(e))
         else:
             sock.settimeout(timeout)
-            if sys.platform != 'win32':
-                sock.setsockopt(socket.IPPROTO_TCP,
-                                TCP_USER_TIMEOUT,
-                                timeout * 1000 if timeout is not None else 0)
+            # TCP_USER_TIMEOUT is not defined on Windows and Mac OS X
+            if sys.platform != 'win32' and sys.platform != 'darwin':
+                try:
+                    timeout = timeout * 1000 if timeout is not None else 0
+                    sock.setsockopt(socket.IPPROTO_TCP,
+                                    TCP_USER_TIMEOUT,
+                                    timeout)
+                except socket.error as error:
+                    code = error[0]
+                    # TCP_USER_TIMEOUT not defined on kernels <2.6.37
+                    if code != errno.ENOPROTOOPT:
+                        raise
 
     @contextlib.contextmanager
     def _transport_socket_timeout(self, timeout):
@@ -916,7 +925,7 @@ class Connection(object):
                         # NOTE(sileht): We need to drain event to receive
                         # heartbeat from the broker but don't hold the
                         # connection too much times. In amqpdriver a connection
-                        # is used exclusivly for read or for write, so we have
+                        # is used exclusively for read or for write, so we have
                         # to do this for connection used for write drain_events
                         # already do that for other connection
                         try:

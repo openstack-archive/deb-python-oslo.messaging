@@ -39,7 +39,7 @@ class FakeIncomingMessage(base.RpcIncomingMessage):
         self.requeue_callback()
 
 
-class FakeListener(base.Listener):
+class FakeListener(base.PollStyleListener):
 
     def __init__(self, exchange_manager, targets, pool=None):
         super(FakeListener, self).__init__()
@@ -222,7 +222,7 @@ class FakeDriver(base.BaseDriver):
         # transport always works
         self._send(target, ctxt, message)
 
-    def listen(self, target):
+    def listen(self, target, batch_size, batch_timeout):
         exchange = target.exchange or self._default_exchange
         listener = FakeListener(self._exchange_manager,
                                 [oslo_messaging.Target(
@@ -232,9 +232,11 @@ class FakeDriver(base.BaseDriver):
                                  oslo_messaging.Target(
                                      topic=target.topic,
                                      exchange=exchange)])
-        return listener
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
 
-    def listen_for_notifications(self, targets_and_priorities, pool):
+    def listen_for_notifications(self, targets_and_priorities, pool,
+                                 batch_size, batch_timeout):
         targets = [
             oslo_messaging.Target(
                 topic='%s.%s' % (target.topic, priority),
@@ -242,7 +244,8 @@ class FakeDriver(base.BaseDriver):
             for target, priority in targets_and_priorities]
         listener = FakeListener(self._exchange_manager, targets, pool)
 
-        return listener
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
 
     def cleanup(self):
         pass

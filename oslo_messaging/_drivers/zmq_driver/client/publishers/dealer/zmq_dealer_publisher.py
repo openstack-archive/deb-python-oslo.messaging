@@ -16,7 +16,6 @@ import logging
 
 from oslo_messaging._drivers.zmq_driver.client.publishers\
     import zmq_publisher_base
-from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_names
 
@@ -31,6 +30,7 @@ class DealerPublisher(zmq_publisher_base.QueuedSender):
 
         def _send_message_data(socket, request):
             socket.send(b'', zmq.SNDMORE)
+            socket.send_pyobj(request.create_envelope(), zmq.SNDMORE)
             socket.send_pyobj(request)
 
             LOG.debug("Sent message_id %(message)s to a target %(target)s",
@@ -54,40 +54,38 @@ class DealerPublisher(zmq_publisher_base.QueuedSender):
             raise zmq_publisher_base.UnsupportedSendPattern(request.msg_type)
         super(DealerPublisher, self).send_request(request)
 
-    def cleanup(self):
-        super(DealerPublisher, self).cleanup()
 
-
-class DealerPublisherLight(zmq_publisher_base.QueuedSender):
-    """Used when publishing to proxy. """
+class DealerPublisherAsync(object):
+    """This simplified publisher is to be used with eventlet only.
+        Eventlet takes care about zmq sockets sharing between green threads
+        using queued lock.
+        Use DealerPublisher for other concurrency models.
+    """
 
     def __init__(self, conf, matchmaker):
-
-        def _do_send_request(socket, request):
-            if request.msg_type == zmq_names.CALL_TYPE:
-                raise zmq_publisher_base.UnsupportedSendPattern(
-                    request.msg_type)
-
-            envelope = request.create_envelope()
-
-            socket.send(b'', zmq.SNDMORE)
-            socket.send_pyobj(envelope, zmq.SNDMORE)
-            socket.send_pyobj(request)
-
-            LOG.debug("->[proxy:%(addr)s] Sending message_id %(message)s to "
-                      "a target %(target)s",
-                      {"message": request.message_id,
-                       "target": request.target,
-                       "addr": zmq_address.get_broker_address(conf)})
-
-        sockets_manager = zmq_publisher_base.SocketsManager(
+        self.sockets_manager = zmq_publisher_base.SocketsManager(
             conf, matchmaker, zmq.ROUTER, zmq.DEALER)
-        super(DealerPublisherLight, self).__init__(
-            sockets_manager, _do_send_request)
-        self.socket = self.outbound_sockets.get_socket_to_broker()
 
-    def _connect_socket(self, target):
-        return self.socket
+    @staticmethod
+    def _send_message_data(socket, request):
+        socket.send(b'', zmq.SNDMORE)
+        socket.send_pyobj(request.create_envelope(), zmq.SNDMORE)
+        socket.send_pyobj(request)
+
+        LOG.debug("Sent message_id %(message)s to a target %(target)s",
+                  {"message": request.message_id,
+                   "target": request.target})
+
+    def send_request(self, request):
+        if request.msg_type == zmq_names.CALL_TYPE:
+            raise zmq_publisher_base.UnsupportedSendPattern(request.msg_type)
+        socket = self.sockets_manager.get_socket(request.target)
+
+        if request.msg_type in zmq_names.MULTISEND_TYPES:
+            for _ in range(socket.connections_count()):
+                self._send_message_data(socket, request)
+        else:
+            self._send_message_data(socket, request)
 
     def cleanup(self):
-        self.socket.close()
+        self.sockets_manager.cleanup()

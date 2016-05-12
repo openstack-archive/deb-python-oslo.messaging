@@ -32,6 +32,8 @@ from oslo_messaging import server
 RPCException = rpc_common.RPCException
 _MATCHMAKER_BACKENDS = ('redis', 'dummy')
 _MATCHMAKER_DEFAULT = 'redis'
+_CONCURRENCY_CHOICES = ('eventlet', 'native')
+_CONCURRENCY_DEFAULT = 'eventlet'
 LOG = logging.getLogger(__name__)
 
 
@@ -46,7 +48,8 @@ zmq_opts = [
                choices=_MATCHMAKER_BACKENDS,
                help='MatchMaker driver.'),
 
-    cfg.StrOpt('rpc_zmq_concurrency', default='eventlet',
+    cfg.StrOpt('rpc_zmq_concurrency', default=_CONCURRENCY_DEFAULT,
+               choices=_CONCURRENCY_CHOICES,
                help='Type of concurrency used. Either "native" or "eventlet"'),
 
     cfg.IntOpt('rpc_zmq_contexts', default=1,
@@ -83,8 +86,11 @@ zmq_opts = [
                 help='Use PUB/SUB pattern for fanout methods. '
                      'PUB/SUB always uses proxy.'),
 
+    cfg.BoolOpt('use_router_proxy', default=True,
+                help='Use ROUTER remote proxy for direct methods.'),
+
     cfg.PortOpt('rpc_zmq_min_port',
-                default=49152,
+                default=49153,
                 help='Minimal port number for random ports range.'),
 
     cfg.IntOpt('rpc_zmq_max_port',
@@ -248,17 +254,19 @@ class ZmqDriver(base.BaseDriver):
         client = self.notifier.get()
         client.send_notify(target, ctxt, message, version, retry)
 
-    def listen(self, target):
+    def listen(self, target, batch_size, batch_timeout):
         """Listen to a specified target on a server side
 
         :param target: Message destination target
         :type target: oslo_messaging.Target
         """
-        server = zmq_server.ZmqServer(self, self.conf, self.matchmaker)
-        server.listen(target)
-        return server
+        listener = zmq_server.ZmqServer(self, self.conf, self.matchmaker,
+                                        target)
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
 
-    def listen_for_notifications(self, targets_and_priorities, pool):
+    def listen_for_notifications(self, targets_and_priorities, pool,
+                                 batch_size, batch_timeout):
         """Listen to a specified list of targets on a server side
 
         :param targets_and_priorities: List of pairs (target, priority)
@@ -266,9 +274,10 @@ class ZmqDriver(base.BaseDriver):
         :param pool: Not used for zmq implementation
         :type pool: object
         """
-        server = zmq_server.ZmqServer(self, self.conf, self.matchmaker)
-        server.listen_notification(targets_and_priorities)
-        return server
+        listener = zmq_server.ZmqNotificationServer(
+            self, self.conf, self.matchmaker, targets_and_priorities)
+        return base.PollStyleListenerAdapter(listener, batch_size,
+                                             batch_timeout)
 
     def cleanup(self):
         """Cleanup all driver's connections finally
