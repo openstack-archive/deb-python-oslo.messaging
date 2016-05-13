@@ -8,6 +8,8 @@ python-oslo.messaging (5.1.0-1) UNRELEASED; urgency=medium
   * d/control: Align (Build-)Depends with upstream.
   * d/p/remove-git-log-call-in-sphinx-doc.patch: Dropped. Fixed upstream.
   * d/gbp.conf: Update gbp branch config for Newton.
+  * d/rules, d/python(3)-oslo.messaging.*: Add update-alternatives support
+    for oslo-messaging-zmq-proxy.
 
  -- Corey Bryant <corey.bryant@canonical.com>  Thu, 12 May 2016 13:43:43 -0400
 
