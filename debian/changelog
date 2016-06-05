@@ -1,4 +1,4 @@
-python-oslo.messaging (5.1.0-1) UNRELEASED; urgency=medium
+python-oslo.messaging (5.1.0-1) experimental; urgency=medium
 
   [ Ondřej Nový ]
   * Standards-Version is 3.9.8 now (no change)
@@ -11,7 +11,10 @@ python-oslo.messaging (5.1.0-1) UNRELEASED; urgency=medium
   * d/rules, d/python(3)-oslo.messaging.*: Add update-alternatives support
     for oslo-messaging-zmq-proxy.
 
- -- Corey Bryant <corey.bryant@canonical.com>  Thu, 12 May 2016 13:43:43 -0400
+  [ Thomas Goirand ]
+  * Added Corey Bryant <corey.bryant@canonical.com> as Uploaders.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 05 Jun 2016 15:03:58 +0000
 
 python-oslo.messaging (4.6.1-2) unstable; urgency=medium
 
