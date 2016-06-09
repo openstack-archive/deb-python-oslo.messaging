@@ -1,3 +1,10 @@
+python-oslo.messaging (5.2.0-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+  * d/control: Align (Build-)Depends with upstream.
+
+ -- James Page <james.page@ubuntu.com>  Thu, 09 Jun 2016 09:40:06 +0100
+
 python-oslo.messaging (5.1.0-1) experimental; urgency=medium
 
   [ Ondřej Nový ]
