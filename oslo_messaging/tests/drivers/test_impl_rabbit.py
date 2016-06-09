@@ -212,10 +212,11 @@ class TestRabbitPublisher(test_utils.BaseTestCase):
     def test_send_with_timeout(self, fake_publish):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
+        exchange_mock = mock.Mock()
         with transport._driver._get_connection(
                 driver_common.PURPOSE_SEND) as pool_conn:
             conn = pool_conn.connection
-            conn._publish(mock.Mock(), 'msg', routing_key='routing_key',
+            conn._publish(exchange_mock, 'msg', routing_key='routing_key',
                           timeout=1)
 
         # NOTE(gcb) kombu accept TTL as seconds instead of millisecond since
@@ -226,23 +227,30 @@ class TestRabbitPublisher(test_utils.BaseTestCase):
         if versionutils.is_compatible('3.0.25', kombu_version):
             fake_publish.assert_called_with(
                 'msg', expiration=1,
-                compression=self.conf.oslo_messaging_rabbit.kombu_compression)
+                exchange=exchange_mock,
+                compression=self.conf.oslo_messaging_rabbit.kombu_compression,
+                routing_key='routing_key')
         else:
             fake_publish.assert_called_with(
                 'msg', expiration=1000,
-                compression=self.conf.oslo_messaging_rabbit.kombu_compression)
+                exchange=exchange_mock,
+                compression=self.conf.oslo_messaging_rabbit.kombu_compression,
+                routing_key='routing_key')
 
     @mock.patch('kombu.messaging.Producer.publish')
     def test_send_no_timeout(self, fake_publish):
         transport = oslo_messaging.get_transport(self.conf,
                                                  'kombu+memory:////')
+        exchange_mock = mock.Mock()
         with transport._driver._get_connection(
                 driver_common.PURPOSE_SEND) as pool_conn:
             conn = pool_conn.connection
-            conn._publish(mock.Mock(), 'msg', routing_key='routing_key')
+            conn._publish(exchange_mock, 'msg', routing_key='routing_key')
         fake_publish.assert_called_with(
             'msg', expiration=None,
-            compression=self.conf.oslo_messaging_rabbit.kombu_compression)
+            compression=self.conf.oslo_messaging_rabbit.kombu_compression,
+            exchange=exchange_mock,
+            routing_key='routing_key')
 
     def test_declared_queue_publisher(self):
         transport = oslo_messaging.get_transport(self.conf,
@@ -277,14 +285,17 @@ class TestRabbitPublisher(test_utils.BaseTestCase):
                 # Ensure it creates it
                 try_send(e_passive)
 
-                with mock.patch('kombu.messaging.Producer', side_effect=exc):
-                    # Should reset the cache and ensures the exchange does
-                    # not exists
-                    self.assertRaises(exc, try_send, e_passive)
-                # Recreate it
-                try_send(e_active)
-                # Ensure it have been recreated
-                try_send(e_passive)
+            with mock.patch('kombu.messaging.Producer.publish',
+                            side_effect=exc):
+                # Ensure the exchange is already in cache
+                self.assertIn('foobar', conn._declared_exchanges)
+                # Reset connection
+                self.assertRaises(exc, try_send, e_passive)
+                # Ensure the cache is empty
+                self.assertEqual(0, len(conn._declared_exchanges))
+
+            try_send(e_active)
+            self.assertIn('foobar', conn._declared_exchanges)
 
 
 class TestRabbitConsume(test_utils.BaseTestCase):
@@ -309,6 +320,51 @@ class TestRabbitConsume(test_utils.BaseTestCase):
                                   conn.consume, timeout=3)
 
         self.assertEqual(0, int(deadline - time.time()))
+
+    def test_consume_from_missing_queue(self):
+        transport = oslo_messaging.get_transport(self.conf, 'kombu+memory://')
+        self.addCleanup(transport.cleanup)
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_LISTEN) as conn:
+            with mock.patch('kombu.Queue.consume') as consume, mock.patch(
+                    'kombu.Queue.declare') as declare:
+                conn.declare_topic_consumer(exchange_name='test',
+                                            topic='test',
+                                            callback=lambda msg: True)
+                import amqp
+                consume.side_effect = [amqp.NotFound, None]
+                conn.connection.connection.recoverable_connection_errors = ()
+                conn.connection.connection.recoverable_channel_errors = ()
+                self.assertEqual(1, declare.call_count)
+                conn.connection.connection.transport.drain_events = mock.Mock()
+                # Ensure that a queue will be re-declared if the consume method
+                # of kombu.Queue raise amqp.NotFound
+                conn.consume()
+                self.assertEqual(2, declare.call_count)
+
+    def test_consume_from_missing_queue_with_io_error_on_redeclaration(self):
+        transport = oslo_messaging.get_transport(self.conf, 'kombu+memory://')
+        self.addCleanup(transport.cleanup)
+        with transport._driver._get_connection(
+                driver_common.PURPOSE_LISTEN) as conn:
+            with mock.patch('kombu.Queue.consume') as consume, mock.patch(
+                    'kombu.Queue.declare') as declare:
+                conn.declare_topic_consumer(exchange_name='test',
+                                            topic='test',
+                                            callback=lambda msg: True)
+                import amqp
+                consume.side_effect = [amqp.NotFound, None]
+                declare.side_effect = [IOError, None]
+
+                conn.connection.connection.recoverable_connection_errors = (
+                    IOError,)
+                conn.connection.connection.recoverable_channel_errors = ()
+                self.assertEqual(1, declare.call_count)
+                conn.connection.connection.transport.drain_events = mock.Mock()
+                # Ensure that a queue will be re-declared after
+                # 'queue not found' exception despite on connection error.
+                conn.consume()
+                self.assertEqual(3, declare.call_count)
 
     def test_connection_ack_have_disconnected_kombu_connection(self):
         transport = oslo_messaging.get_transport(self.conf,
@@ -440,14 +496,6 @@ class TestSendReceive(test_utils.BaseTestCase):
         senders = []
         replies = []
         msgs = []
-        errors = []
-
-        def stub_error(msg, *a, **kw):
-            if (a and len(a) == 1 and isinstance(a[0], dict) and a[0]):
-                a = a[0]
-            errors.append(str(msg) % a)
-
-        self.stubs.Set(driver_common.LOG, 'error', stub_error)
 
         def send_and_wait_for_reply(i):
             try:
@@ -489,8 +537,7 @@ class TestSendReceive(test_utils.BaseTestCase):
                         raise ZeroDivisionError
                     except Exception:
                         failure = sys.exc_info()
-                    msgs[i].reply(failure=failure,
-                                  log_failure=not self.expected)
+                    msgs[i].reply(failure=failure)
                 elif self.rx_id:
                     msgs[i].reply({'rx_id': i})
                 else:
@@ -507,11 +554,6 @@ class TestSendReceive(test_utils.BaseTestCase):
                 self.assertEqual({'rx_id': order[i]}, reply)
             else:
                 self.assertEqual(self.reply, reply)
-
-        if not self.timeout and self.failure and not self.expected:
-            self.assertTrue(len(errors) > 0, errors)
-        else:
-            self.assertEqual(0, len(errors), errors)
 
 
 TestSendReceive.generate_scenarios()

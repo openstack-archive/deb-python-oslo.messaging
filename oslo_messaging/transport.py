@@ -27,6 +27,8 @@ __all__ = [
     'set_transport_defaults',
 ]
 
+import logging
+
 from oslo_config import cfg
 import six
 from six.moves.urllib import parse
@@ -34,17 +36,20 @@ from stevedore import driver
 
 from oslo_messaging import exceptions
 
+LOG = logging.getLogger(__name__)
 
 _transport_opts = [
     cfg.StrOpt('transport_url',
                secret=True,
                help='A URL representing the messaging driver to use and its '
-                    'full configuration. If not set, we fall back to the '
-                    'rpc_backend option and driver specific configuration.'),
+                    'full configuration.'),
     cfg.StrOpt('rpc_backend',
+               deprecated_for_removal=True,
+               deprecated_reason="Replaced by [DEFAULT]/transport_url",
                default='rabbit',
                help='The messaging driver to use, defaults to rabbit. Other '
                     'drivers include amqp and zmq.'),
+
     cfg.StrOpt('control_exchange',
                default='openstack',
                help='The default exchange under which topics are scoped. May '
@@ -173,11 +178,7 @@ def get_transport(conf, url=None, allowed_remote_exmods=None, aliases=None):
     conf.register_opts(_transport_opts)
 
     if not isinstance(url, TransportURL):
-        url = url or conf.transport_url
-        parsed = TransportURL.parse(conf, url, aliases)
-        if not parsed.transport:
-            raise InvalidTransportURL(url, 'No scheme specified in "%s"' % url)
-        url = parsed
+        url = TransportURL.parse(conf, url, aliases)
 
     kwargs = dict(default_exchange=conf.control_exchange,
                   allowed_remote_exmods=allowed_remote_exmods)
@@ -229,7 +230,7 @@ class TransportURL(object):
 
     Transport URLs take the form::
 
-      transport://user:pass@host1:port[,hostN:portN]/virtual_host
+      transport://user:pass@host:port[,userN:passN@hostN:portN]/virtual_host
 
     i.e. the scheme selects the transport driver, you may include multiple
     hosts in netloc and the path part is a "virtual host" partition path.
@@ -242,7 +243,7 @@ class TransportURL(object):
     :type virtual_host: str
     :param hosts: a list of TransportHost objects
     :type hosts: list
-    :param aliases: A map of transport alias to transport name
+    :param aliases: DEPRECATED: A map of transport alias to transport name
     :type aliases: dict
     """
 
@@ -261,13 +262,28 @@ class TransportURL(object):
         else:
             self.aliases = aliases
 
+        self._deprecation_logged = False
+
     @property
     def transport(self):
         if self._transport is None:
             transport = self.conf.rpc_backend
         else:
             transport = self._transport
-        return self.aliases.get(transport, transport)
+        final_transport = self.aliases.get(transport, transport)
+        if not self._deprecation_logged and final_transport != transport:
+            # NOTE(sileht): The first step is deprecate this one cycle.
+            # To ensure deployer have updated they configuration during Octavia
+            # Then in P we will deprecate aliases kwargs of TransportURL() and
+            # get_transport() for consuming application
+            LOG.warning('legacy "rpc_backend" is deprecated, '
+                        '"%(legacy_transport)s" must be replaced by '
+                        '"%(final_transport)s"' % {
+                            'legacy_transport': transport,
+                            'final_transport': final_transport})
+            self._deprecation_logged = True
+
+        return final_transport
 
     @transport.setter
     def transport(self, value):
@@ -333,12 +349,12 @@ class TransportURL(object):
         return url
 
     @classmethod
-    def parse(cls, conf, url, aliases=None):
+    def parse(cls, conf, url=None, aliases=None):
         """Parse an url.
 
         Assuming a URL takes the form of::
 
-          transport://user:pass@host1:port[,hostN:portN]/virtual_host
+          transport://user:pass@host:port[,userN:passN@hostN:portN]/virtual_host
 
         then parse the URL and return a TransportURL object.
 
@@ -355,6 +371,8 @@ class TransportURL(object):
               {"host": "host2:port2"}
             ]
 
+        If the url is not provided conf.transport_url is parsed intead.
+
         :param conf: a ConfigOpts instance
         :type conf: oslo.config.cfg.ConfigOpts
         :param url: The URL to parse
@@ -363,6 +381,8 @@ class TransportURL(object):
         :type aliases: dict
         :returns: A TransportURL
         """
+
+        url = url or conf.transport_url
         if not url:
             return cls(conf, aliases=aliases)
 
@@ -370,6 +390,9 @@ class TransportURL(object):
             raise InvalidTransportURL(url, 'Wrong URL type')
 
         url = parse.urlparse(url)
+
+        if not url.scheme:
+            raise InvalidTransportURL(url.geturl(), 'No scheme specified')
 
         # Make sure there's not a query string; that could identify
         # requirements we can't comply with (for example ssl), so reject it if
@@ -381,7 +404,7 @@ class TransportURL(object):
 
         virtual_host = None
         if url.path.startswith('/'):
-            virtual_host = url.path[1:]
+            virtual_host = parse.unquote(url.path[1:])
 
         hosts = []
 
@@ -396,6 +419,8 @@ class TransportURL(object):
                 username, hostname = host.split('@', 1)
                 if ':' in username:
                     username, password = username.split(':', 1)
+                    password = parse.unquote(password)
+                username = parse.unquote(username)
 
             if not hostname:
                 hostname = None
