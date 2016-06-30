@@ -5,7 +5,7 @@ python-oslo.messaging (5.5.0-1) UNRELEASED; urgency=medium
   * d/control: Align (Build-)Depends with upstream.
 
   [ David Della Vecchia ]
-  * New upstream release for OpenStack Newton.
+  * New upstream release.
   * d/control: Align (build-)depnds with upstream.
 
  -- David Della Vecchia <ddv@canonical.com>  Thu, 30 Jun 2016 10:59:18 -0400
