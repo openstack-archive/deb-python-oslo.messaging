@@ -48,11 +48,11 @@ class ZmqServer(base.PollStyleListener):
             conf, self.poller, self) if conf.use_pub_sub else None
 
         self.consumers = []
-        if self.router_consumer:
+        if self.router_consumer is not None:
             self.consumers.append(self.router_consumer)
-        if self.dealer_consumer:
+        if self.dealer_consumer is not None:
             self.consumers.append(self.dealer_consumer)
-        if self.sub_consumer:
+        if self.sub_consumer is not None:
             self.consumers.append(self.sub_consumer)
 
     @base.batch_poll_helper
@@ -62,10 +62,10 @@ class ZmqServer(base.PollStyleListener):
         return message
 
     def stop(self):
-        if self.router_consumer:
-            LOG.info(_LI("Stop server %(address)s:%(port)s"),
-                     {'address': self.router_consumer.address,
-                      'port': self.router_consumer.port})
+        self.poller.close()
+        LOG.info(_LI("Stop server %(target)s"), {'target': self.target})
+        for consumer in self.consumers:
+            consumer.stop()
 
     def cleanup(self):
         self.poller.close()

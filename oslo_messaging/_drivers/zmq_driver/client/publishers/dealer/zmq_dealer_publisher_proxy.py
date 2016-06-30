@@ -25,6 +25,7 @@ from oslo_messaging._drivers.zmq_driver.client.publishers \
 from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_names
+from oslo_messaging._drivers.zmq_driver import zmq_updater
 
 zmq = zmq_async.import_zmq()
 
@@ -35,20 +36,33 @@ class DealerPublisherProxy(object):
     """Used when publishing to a proxy. """
 
     def __init__(self, conf, matchmaker, socket_to_proxy):
+        self.conf = conf
         self.sockets_manager = zmq_publisher_base.SocketsManager(
             conf, matchmaker, zmq.ROUTER, zmq.DEALER)
         self.socket = socket_to_proxy
         self.routing_table = RoutingTable(conf, matchmaker)
+        self.connection_updater = PublisherConnectionUpdater(
+            conf, matchmaker, self.socket)
 
     def send_request(self, request):
         if request.msg_type == zmq_names.CALL_TYPE:
             raise zmq_publisher_base.UnsupportedSendPattern(
                 request.msg_type)
 
-        routing_key = self.routing_table.get_routable_host(request.target) \
-            if request.msg_type in zmq_names.DIRECT_TYPES else \
-            zmq_address.target_to_subscribe_filter(request.target)
+        if self.conf.use_pub_sub:
+            routing_key = self.routing_table.get_routable_host(request.target) \
+                if request.msg_type in zmq_names.DIRECT_TYPES else \
+                zmq_address.target_to_subscribe_filter(request.target)
+            self._do_send_request(request, routing_key)
+        else:
+            routing_keys = \
+                [self.routing_table.get_routable_host(request.target)] \
+                if request.msg_type in zmq_names.DIRECT_TYPES else \
+                self.routing_table.get_all_hosts(request.target)
+            for routing_key in routing_keys:
+                self._do_send_request(request, routing_key)
 
+    def _do_send_request(self, request, routing_key):
         self.socket.send(b'', zmq.SNDMORE)
         self.socket.send(six.b(str(request.msg_type)), zmq.SNDMORE)
         self.socket.send(six.b(routing_key), zmq.SNDMORE)
@@ -84,6 +98,8 @@ class CallSenderProxy(zmq_dealer_call_publisher.CallSender):
         self.socket = self.outbound_sockets.get_socket_to_publishers()
         self.reply_waiter.poll_socket(self.socket)
         self.routing_table = RoutingTable(conf, matchmaker)
+        self.connection_updater = PublisherConnectionUpdater(
+            conf, matchmaker, self.socket)
 
     def _connect_socket(self, target):
         return self.socket
@@ -132,6 +148,10 @@ class RoutingTable(object):
         self.routing_table = {}
         self.routable_hosts = {}
 
+    def get_all_hosts(self, target):
+        self._update_routing_table(target)
+        return list(self.routable_hosts.get(str(target)) or [])
+
     def get_routable_host(self, target):
         self._update_routing_table(target)
         hosts_for_target = self.routable_hosts[str(target)]
@@ -158,3 +178,11 @@ class RoutingTable(object):
     def _renew_routable_hosts(self, target):
         hosts, _ = self.routing_table[str(target)]
         self.routable_hosts[str(target)] = list(hosts)
+
+
+class PublisherConnectionUpdater(zmq_updater.ConnectionUpdater):
+
+    def _update_connection(self):
+        publishers = self.matchmaker.get_publishers()
+        for pub_address, router_address in publishers:
+            self.socket.connect_to_host(router_address)

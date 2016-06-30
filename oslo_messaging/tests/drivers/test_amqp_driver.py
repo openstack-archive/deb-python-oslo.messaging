@@ -18,7 +18,6 @@ import select
 import shutil
 import socket
 import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -378,58 +377,71 @@ class TestAuthentication(test_utils.BaseTestCase):
 class TestCyrusAuthentication(test_utils.BaseTestCase):
     """Test the driver's Cyrus SASL integration"""
 
-    def setUp(self):
-        """Create a simple SASL configuration. This assumes saslpasswd2 is in
-        the OS path, otherwise the test will be skipped.
-        """
-        super(TestCyrusAuthentication, self).setUp()
+    _conf_dir = None
+
+    # Note: don't add ANONYMOUS or EXTERNAL mechs without updating the
+    # test_authentication_bad_mechs test below
+    _mechs = "DIGEST-MD5 SCRAM-SHA-1 CRAM-MD5 PLAIN"
+
+    @classmethod
+    def setUpClass(cls):
+        # The Cyrus library can only be initialized once per _process_
         # Create a SASL configuration and user database,
         # add a user 'joe' with password 'secret':
-        self._conf_dir = tempfile.mkdtemp()
-        db = os.path.join(self._conf_dir, 'openstack.sasldb')
+        cls._conf_dir = "/tmp/amqp1_tests_%s" % os.getpid()
+        # no, we cannot use tempfile.mkdtemp() as it will 'helpfully' remove
+        # the temp dir after the first test is run (?why?)
+        os.makedirs(cls._conf_dir)
+        db = os.path.join(cls._conf_dir, 'openstack.sasldb')
         _t = "echo secret | saslpasswd2 -c -p -f ${db} joe"
         cmd = Template(_t).substitute(db=db)
         try:
             subprocess.check_call(args=cmd, shell=True)
         except Exception:
-            shutil.rmtree(self._conf_dir, ignore_errors=True)
-            self._conf_dir = None
-            raise self.skip("Cyrus tool saslpasswd2 not installed")
+            shutil.rmtree(cls._conf_dir, ignore_errors=True)
+            cls._conf_dir = None
+            return
 
-        # configure the SASL broker:
-        conf = os.path.join(self._conf_dir, 'openstack.conf')
-        # Note: don't add ANONYMOUS or EXTERNAL without updating the
-        # test_authentication_bad_mechs test below
-        mechs = "DIGEST-MD5 SCRAM-SHA-1 CRAM-MD5 PLAIN"
+        # configure the SASL server:
+        conf = os.path.join(cls._conf_dir, 'openstack.conf')
         t = Template("""sasldb_path: ${db}
 pwcheck_method: auxprop
 auxprop_plugin: sasldb
 mech_list: ${mechs}
 """)
         with open(conf, 'w') as f:
-            f.write(t.substitute(db=db, mechs=mechs))
+            f.write(t.substitute(db=db, mechs=cls._mechs))
 
-        self._broker = FakeBroker(sasl_mechanisms=mechs,
+    @classmethod
+    def tearDownClass(cls):
+        if cls._conf_dir:
+            shutil.rmtree(cls._conf_dir, ignore_errors=True)
+
+    def setUp(self):
+        # fire up a test broker with the SASL config:
+        super(TestCyrusAuthentication, self).setUp()
+        if TestCyrusAuthentication._conf_dir is None:
+            self.skipTest("Cyrus SASL tools not installed")
+        _mechs = TestCyrusAuthentication._mechs
+        _dir = TestCyrusAuthentication._conf_dir
+        self._broker = FakeBroker(sasl_mechanisms=_mechs,
                                   user_credentials=["\0joe\0secret"],
-                                  sasl_config_dir=self._conf_dir,
+                                  sasl_config_dir=_dir,
                                   sasl_config_name="openstack")
         self._broker.start()
         self.messaging_conf.transport_driver = 'amqp'
         self.conf = self.messaging_conf.conf
 
     def tearDown(self):
-        super(TestCyrusAuthentication, self).tearDown()
         if self._broker:
             self._broker.stop()
             self._broker = None
-        if self._conf_dir:
-            shutil.rmtree(self._conf_dir, ignore_errors=True)
+        super(TestCyrusAuthentication, self).tearDown()
 
     def test_authentication_ok(self):
         """Verify that username and password given in TransportHost are
         accepted by the broker.
         """
-
         addr = "amqp://joe:secret@%s:%d" % (self._broker.host,
                                             self._broker.port)
         url = oslo_messaging.TransportURL.parse(self.conf, addr)
@@ -512,6 +524,8 @@ class TestFailover(test_utils.BaseTestCase):
     def setUp(self):
         super(TestFailover, self).setUp()
         self._brokers = [FakeBroker(), FakeBroker()]
+        self._primary = 0
+        self._backup = 1
         hosts = []
         for broker in self._brokers:
             hosts.append(oslo_messaging.TransportHost(hostname=broker.host,
@@ -526,8 +540,10 @@ class TestFailover(test_utils.BaseTestCase):
             if broker.isAlive():
                 broker.stop()
 
-    def _failover(self, fail_brokers):
+    def _failover(self, fail_broker):
         self._brokers[0].start()
+        self._brokers[1].start()
+
         # self.config(trace=True, group="oslo_messaging_amqp")
         driver = amqp_driver.ProtonDriver(self.conf, self._broker_url)
 
@@ -535,11 +551,16 @@ class TestFailover(test_utils.BaseTestCase):
         listener = _ListenerThread(
             driver.listen(target, None, None)._poll_style_listener, 2)
 
-        # wait for listener links to come up
+        # wait for listener links to come up on either broker
         # 4 == 3 links per listener + 1 for the global reply queue
-        predicate = lambda: self._brokers[0].sender_link_count == 4
+        predicate = lambda: ((self._brokers[0].sender_link_count == 4) or
+                             (self._brokers[1].sender_link_count == 4))
         _wait_until(predicate, 30)
         self.assertTrue(predicate())
+
+        if self._brokers[1].sender_link_count == 4:
+            self._primary = 1
+            self._backup = 0
 
         rc = driver.send(target, {"context": "whatever"},
                          {"method": "echo", "id": "echo-1"},
@@ -549,15 +570,15 @@ class TestFailover(test_utils.BaseTestCase):
         self.assertEqual(rc.get('correlation-id'), 'echo-1')
 
         # 1 request msg, 1 response:
-        self.assertEqual(self._brokers[0].topic_count, 1)
-        self.assertEqual(self._brokers[0].direct_count, 1)
+        self.assertEqual(self._brokers[self._primary].topic_count, 1)
+        self.assertEqual(self._brokers[self._primary].direct_count, 1)
 
         # invoke failover method
-        fail_brokers(self._brokers[0], self._brokers[1])
+        fail_broker(self._brokers[self._primary])
 
         # wait for listener links to re-establish on broker 1
         # 4 = 3 links per listener + 1 for the global reply queue
-        predicate = lambda: self._brokers[1].sender_link_count == 4
+        predicate = lambda: self._brokers[self._backup].sender_link_count == 4
         _wait_until(predicate, 30)
         self.assertTrue(predicate())
 
@@ -570,44 +591,41 @@ class TestFailover(test_utils.BaseTestCase):
         self.assertEqual(rc.get('correlation-id'), 'echo-2')
 
         # 1 request msg, 1 response:
-        self.assertEqual(self._brokers[1].topic_count, 1)
-        self.assertEqual(self._brokers[1].direct_count, 1)
+        self.assertEqual(self._brokers[self._backup].topic_count, 1)
+        self.assertEqual(self._brokers[self._backup].direct_count, 1)
 
         listener.join(timeout=30)
         self.assertFalse(listener.isAlive())
 
         # note: stopping the broker first tests cleaning up driver without a
         # connection active
-        self._brokers[1].stop()
+        self._brokers[self._backup].stop()
         driver.cleanup()
 
     def test_broker_crash(self):
         """Simulate a failure of one broker."""
-        def _meth(broker0, broker1):
-            # fail broker 0 and start broker 1:
-            broker0.stop()
+        def _meth(broker):
+            # fail broker:
+            broker.stop()
             time.sleep(0.5)
-            broker1.start()
         self._failover(_meth)
 
     def test_broker_shutdown(self):
         """Simulate a normal shutdown of a broker."""
-        def _meth(broker0, broker1):
-            broker0.stop(clean=True)
+        def _meth(broker):
+            broker.stop(clean=True)
             time.sleep(0.5)
-            broker1.start()
         self._failover(_meth)
 
     def test_heartbeat_failover(self):
         """Simulate broker heartbeat timeout."""
-        def _meth(broker0, broker1):
-            # keep alive heartbeat from broker 0 will stop, which should force
-            # failover to broker 1 in about two seconds
-            broker0.pause()
-            broker1.start()
+        def _meth(broker):
+            # keep alive heartbeat from primary broker will stop, which should
+            # force failover to backup broker in about two seconds
+            broker.pause()
         self.config(idle_timeout=2, group="oslo_messaging_amqp")
         self._failover(_meth)
-        self._brokers[0].stop()
+        self._brokers[self._primary].stop()
 
     def test_listener_failover(self):
         """Verify that Listeners sharing the same topic are re-established
