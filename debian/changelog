@@ -1,9 +1,13 @@
-python-oslo.messaging (5.2.0-1) UNRELEASED; urgency=medium
+python-oslo.messaging (5.5.0-1) UNRELEASED; urgency=medium
 
+  [ James Page ]
   * New upstream release.
   * d/control: Align (Build-)Depends with upstream.
 
- -- James Page <james.page@ubuntu.com>  Thu, 09 Jun 2016 09:40:06 +0100
+  [ David Della Vecchia ]
+  * New upstream release for OpenStack Newton.
+
+ -- David Della Vecchia <ddv@canonical.com>  Thu, 30 Jun 2016 10:59:18 -0400
 
 python-oslo.messaging (5.1.0-1) experimental; urgency=medium
 
