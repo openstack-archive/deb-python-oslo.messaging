@@ -184,12 +184,3 @@ Description: Oslo Messaging ZeroMQ receiver daemon
  .
  This package provides the ZeroMQ receiver which processes incoming
  messages on all servers participating in a ZeroMQ messaging cluster.
-
-Package: python-oslo-messaging
-Section: oldlibs
-Priority: extra
-Architecture: all
-Depends: python-oslo.messaging,
-         ${misc:Depends},
-Description: transitional dummy package for python-oslo-messaging
- This transitional package is safe to remove.

@@ -1,4 +1,4 @@
-python-oslo.messaging (5.5.0-1) UNRELEASED; urgency=medium
+python-oslo.messaging (5.5.0-1) experimental; urgency=medium
 
   [ James Page ]
   * New upstream release.
@@ -8,7 +8,11 @@ python-oslo.messaging (5.5.0-1) UNRELEASED; urgency=medium
   * New upstream release.
   * d/control: Align (build-)depnds with upstream.
 
- -- David Della Vecchia <ddv@canonical.com>  Thu, 30 Jun 2016 10:59:18 -0400
+  [ Thomas Goirand ]
+  * Drop python-oslo-messaging transition package not needed since Xenial is
+    released.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jul 2016 15:20:54 +0000
 
 python-oslo.messaging (5.1.0-1) experimental; urgency=medium
 
