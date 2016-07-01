@@ -1,59 +1,32 @@
 #!/usr/bin/make -f
 
-PYTHONS:=$(shell pyversions -vr)
-PYTHON3S:=$(shell py3versions -vr)
-
 LAST_CHANGE = $(shell dpkg-parsechangelog -S Date)
 BUILD_DATE  = $(shell LC_ALL=C date -u "+%B %d, %Y" -d "$(LAST_CHANGE)")
 SPHINXOPTS := -D html_last_updated_fmt="$(BUILD_DATE)"
 
 UPSTREAM_GIT = git://github.com/openstack/oslo.messaging.git
-
 include /usr/share/openstack-pkg-tools/pkgos.make
-export OSLO_PACKAGE_VERSION=$(VERSION)
 
 %:
 	dh $@ --buildsystem=python_distutils --with python2,python3,sphinxdoc,systemd
 
-override_dh_install:
-	set -e ; for pyvers in $(PYTHONS); do \
-		python$$pyvers setup.py install --install-layout=deb \
-			--root $(CURDIR)/debian/python-oslo.messaging; \
-	done
-	set -e ; for pyvers in $(PYTHON3S); do \
-		python$$pyvers setup.py install --install-layout=deb \
-			--root $(CURDIR)/debian/python3-oslo.messaging; \
-	done
-	mv $(CURDIR)/debian/python-oslo.messaging/usr/bin/oslo-messaging-zmq-broker $(CURDIR)/debian/python-oslo.messaging/usr/bin/python2-oslo-messaging-zmq-broker
-	mv $(CURDIR)/debian/python3-oslo.messaging/usr/bin/oslo-messaging-zmq-broker $(CURDIR)/debian/python3-oslo.messaging/usr/bin/python3-oslo-messaging-zmq-broker
-	mv $(CURDIR)/debian/python-oslo.messaging/usr/bin/oslo-messaging-zmq-proxy $(CURDIR)/debian/python-oslo.messaging/usr/bin/python2-oslo-messaging-zmq-proxy
-	mv $(CURDIR)/debian/python3-oslo.messaging/usr/bin/oslo-messaging-zmq-proxy $(CURDIR)/debian/python3-oslo.messaging/usr/bin/python3-oslo-messaging-zmq-proxy
+override_dh_auto_install:
+	pkgos-dh_auto_install
 
 override_dh_python3:
 	dh_python3 --shebang=/usr/bin/python3
 
 override_dh_auto_test:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
-	@echo "===> Running tests"
-	set -e ; set -x ; for i in 2.7 $(PYTHON3S) ; do \
-		PYMAJOR=`echo $$i | cut -d'.' -f1` ; \
-		echo "===> Testing with python$$i (python$$PYMAJOR)" ; \
-		rm -rf .testrepository ; \
-		testr-python$$PYMAJOR init ; \
-		TEMP_REZ=`mktemp -t` ; \
-		PYTHONPATH=$(CURDIR) PYTHON=python$$i testr-python$$PYMAJOR run --subunit 'oslo_messaging\.tests\.(?!(.*drivers.test_impl_rabbit\.TestRabbitDriverLoad\.test_driver_load.*|.*test_transport.GetTransportSadPathTestCase.test_get_transport_sad.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*))' | tee $$TEMP_REZ | subunit2pyunit ; \
-		cat $$TEMP_REZ | subunit-filter -s --no-passthrough | subunit-stats ; \
-		rm -f $$TEMP_REZ ; \
-		testr-python$$PYMAJOR slowest ; \
-	done
+	pkgos-dh_auto_test 'oslo_messaging\.tests\.(?!(.*drivers.test_impl_rabbit\.TestRabbitDriverLoad\.test_driver_load.*|.*test_transport.GetTransportSadPathTestCase.test_get_transport_sad.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*))'
 endif
 
 override_dh_sphinxdoc:
 ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	sphinx-build $(SPHINXOPTS) -b html doc/source $(CURDIR)/debian/python-oslo.messaging/usr/share/doc/python-oslo.messaging/html
-	dh_sphinxdoc -O--buildsystem=python_distutils
+	dh_sphinxdoc
 endif
 
 override_dh_auto_clean:
 	# Don't attempt to fetch pbr from PyPi...
-	http_proxy=127.0.0.1:9 https_proxy=127.0.0.1:9 dh_auto_clean -O--buildsystem=python_distutils
+	http_proxy=127.0.0.1:9 https_proxy=127.0.0.1:9 dh_auto_clean

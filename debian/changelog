@@ -11,6 +11,7 @@ python-oslo.messaging (5.5.0-1) experimental; urgency=medium
   [ Thomas Goirand ]
   * Drop python-oslo-messaging transition package not needed since Xenial is
     released.
+  * Switch to pkgos-dh_auto_{test,install}.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 01 Jul 2016 15:20:54 +0000
 
