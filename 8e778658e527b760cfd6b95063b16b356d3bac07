@@ -1,0 +1,10 @@
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Code-Review+1: Gevorg Davoian <gdavoian@mirantis.com>
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Workflow+1: Doug Hellmann <doug@doughellmann.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 12 Jul 2016 13:48:20 +0000
+Reviewed-on: https://review.openstack.org/340773
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
