@@ -1,0 +1,9 @@
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Apr 2015 14:00:59 +0000
+Reviewed-on: https://review.openstack.org/176698
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/kilo

@@ -1,0 +1,9 @@
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review+1: Joshua Harlow <jxharlow@godaddy.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 25 Mar 2015 00:28:32 +0000
+Reviewed-on: https://review.openstack.org/167312
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/kilo

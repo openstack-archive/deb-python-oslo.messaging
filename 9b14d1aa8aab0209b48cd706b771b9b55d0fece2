@@ -1,0 +1,9 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Workflow+1: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 24 Mar 2015 17:19:03 +0000
+Reviewed-on: https://review.openstack.org/166349
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/kilo

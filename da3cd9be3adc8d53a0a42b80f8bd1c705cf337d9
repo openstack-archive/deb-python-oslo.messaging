@@ -1,0 +1,12 @@
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+1: gordon chung <gord@live.ca>
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Code-Review+1: Ken Giusti <kgiusti@gmail.com>
+Code-Review+2: Joshua Harlow <jxharlow@godaddy.com>
+Workflow+1: Joshua Harlow <jxharlow@godaddy.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 14 Mar 2016 17:18:04 +0000
+Reviewed-on: https://review.openstack.org/292312
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/mitaka
