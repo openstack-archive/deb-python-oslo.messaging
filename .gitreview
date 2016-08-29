@@ -1,4 +1,5 @@
 [gerrit]
 host=review.openstack.org
 port=29418
-project=openstack/oslo.messaging.git
+project=openstack/deb-python-oslo.messaging.git
+defaultbranch=debian/newton
