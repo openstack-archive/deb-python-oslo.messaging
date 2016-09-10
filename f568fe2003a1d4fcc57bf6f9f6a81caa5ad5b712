@@ -1,0 +1,10 @@
+Code-Review+1: Kirill Bespalov <kbespalov@mirantis.com>
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 16 Jun 2016 03:24:13 +0000
+Reviewed-on: https://review.openstack.org/326292
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/mitaka

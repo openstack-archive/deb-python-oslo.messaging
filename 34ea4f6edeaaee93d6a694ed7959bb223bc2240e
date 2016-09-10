@@ -1,0 +1,9 @@
+Code-Review+2: Dmitriy Ukhlov <dukhlov@mirantis.com>
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Workflow+1: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 30 Aug 2016 13:14:58 +0000
+Reviewed-on: https://review.openstack.org/361078
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/mitaka
