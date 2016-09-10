@@ -1,0 +1,9 @@
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review+1: Clint Adams <clint@gcfm.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 12 Jan 2016 18:14:45 +0000
+Reviewed-on: https://review.openstack.org/259796
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/liberty

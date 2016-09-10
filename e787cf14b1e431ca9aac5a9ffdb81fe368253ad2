@@ -1,0 +1,10 @@
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review+1: Yatin Kumbhare <yatinkumbhare@gmail.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 18 Jan 2016 12:48:13 +0000
+Reviewed-on: https://review.openstack.org/268910
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/liberty
