@@ -11,11 +11,12 @@ export ZMQ_MATCHMAKER=redis
 export ZMQ_REDIS_PORT=65123
 export ZMQ_IPC_DIR=${DATADIR}
 export ZMQ_USE_PUB_SUB=false
-export ZMQ_USE_ROUTER_PROXY=true
+export ZMQ_USE_ROUTER_PROXY=false
 
 cat > ${DATADIR}/zmq.conf <<EOF
 [DEFAULT]
 transport_url=${TRANSPORT_URL}
+[oslo_messaging_zmq]
 rpc_zmq_matchmaker=${ZMQ_MATCHMAKER}
 rpc_zmq_ipc_dir=${ZMQ_IPC_DIR}
 use_pub_sub=${ZMQ_USE_PUB_SUB}
