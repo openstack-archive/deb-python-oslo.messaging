@@ -16,32 +16,18 @@ import logging
 
 import six
 
-from oslo_messaging._drivers import base
-from oslo_messaging._drivers.zmq_driver.server.consumers\
+from oslo_messaging._drivers.zmq_driver.server.consumers \
     import zmq_consumer_base
+from oslo_messaging._drivers.zmq_driver.server import zmq_incoming_message
 from oslo_messaging._drivers.zmq_driver import zmq_address
 from oslo_messaging._drivers.zmq_driver import zmq_async
 from oslo_messaging._drivers.zmq_driver import zmq_socket
+from oslo_messaging._drivers.zmq_driver import zmq_updater
 from oslo_messaging._i18n import _LE
 
 LOG = logging.getLogger(__name__)
 
 zmq = zmq_async.import_zmq()
-
-
-class SubIncomingMessage(base.RpcIncomingMessage):
-
-    def __init__(self, context, message):
-        super(SubIncomingMessage, self).__init__(context, message)
-
-    def reply(self, reply=None, failure=None):
-        """Reply is not needed for non-call messages."""
-
-    def acknowledge(self):
-        """Requeue is not supported"""
-
-    def requeue(self):
-        """Requeue is not supported"""
 
 
 class SubConsumer(zmq_consumer_base.ConsumerBase):
@@ -50,17 +36,13 @@ class SubConsumer(zmq_consumer_base.ConsumerBase):
         super(SubConsumer, self).__init__(conf, poller, server)
         self.matchmaker = server.matchmaker
         self.target = server.target
-        self.socket = zmq_socket.ZmqSocket(self.conf, self.context, zmq.SUB)
+        self.socket = zmq_socket.ZmqSocket(self.conf, self.context, zmq.SUB,
+                                           immediate=False)
         self.sockets.append(self.socket)
         self._subscribe_on_target(self.target)
-        self.on_publishers(self.matchmaker.get_publishers())
+        self.connection_updater = SubscriberConnectionUpdater(
+            conf, self.matchmaker, self.socket)
         self.poller.register(self.socket, self.receive_message)
-
-    def on_publishers(self, publishers):
-        for host, sync in publishers:
-            self.socket.connect(zmq_address.get_tcp_direct_address(host))
-        LOG.debug("[%s] SUB consumer connected to publishers %s",
-                  self.socket.handle.identity, publishers)
 
     def _subscribe_on_target(self, target):
         topic_filter = zmq_address.target_to_subscribe_filter(target)
@@ -78,8 +60,7 @@ class SubConsumer(zmq_consumer_base.ConsumerBase):
     def _receive_request(socket):
         topic_filter = socket.recv()
         message_id = socket.recv()
-        context = socket.recv_pyobj()
-        message = socket.recv_pyobj()
+        context, message = socket.recv_loaded()
         LOG.debug("Received %(topic_filter)s topic message %(id)s",
                   {'id': message_id, 'topic_filter': topic_filter})
         return context, message
@@ -89,10 +70,20 @@ class SubConsumer(zmq_consumer_base.ConsumerBase):
             context, message = self._receive_request(socket)
             if not message:
                 return None
-
-            return SubIncomingMessage(context, message)
+            return zmq_incoming_message.ZmqIncomingMessage(context, message)
         except (zmq.ZMQError, AssertionError) as e:
             LOG.error(_LE("Receiving message failed: %s"), str(e))
 
     def cleanup(self):
+        self.connection_updater.cleanup()
         super(SubConsumer, self).cleanup()
+
+
+class SubscriberConnectionUpdater(zmq_updater.ConnectionUpdater):
+
+    def _update_connection(self):
+        publishers = self.matchmaker.get_publishers()
+        for host, sync in publishers:
+            self.socket.connect(zmq_address.get_tcp_direct_address(host))
+        LOG.debug("[%s] SUB consumer connected to publishers %s",
+                  self.socket.handle.identity, publishers)

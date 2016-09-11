@@ -18,7 +18,7 @@ override_dh_python3:
 
 override_dh_auto_test:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
-	pkgos-dh_auto_test 'oslo_messaging\.tests\.(?!(.*drivers.test_impl_rabbit\.TestRabbitDriverLoad\.test_driver_load.*|.*test_transport.GetTransportSadPathTestCase.test_get_transport_sad.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*))'
+	pkgos-dh_auto_test 'oslo_messaging\.tests\.(?!(.*drivers.test_impl_rabbit\.TestRabbitDriverLoad\.test_driver_load.*|.*test_transport.GetTransportSadPathTestCase.test_get_transport_sad.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*|.*drivers\.test_impl_rabbit\.TestSendReceive\.test_send_receive.*|.*TestZmqAckManager.*))'
 endif
 
 override_dh_sphinxdoc:

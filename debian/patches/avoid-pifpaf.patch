@@ -1,0 +1,22 @@
+Description: Avoid use of pifpaf
+ pifpaf is only used for directly control of RabbitMQ in upstream
+ functional testing, and is not packaged in Debian or Ubuntu.
+ .
+ Don't error on import if its not found.
+Author: James Page <james.page@ubuntu.com>
+Forwarded: not-needed
+
+--- a/oslo_messaging/tests/functional/test_rabbitmq.py
++++ b/oslo_messaging/tests/functional/test_rabbitmq.py
+@@ -16,7 +16,10 @@ import signal
+ import time
+ 
+ import fixtures
+-from pifpaf.drivers import rabbitmq
++try:
++    from pifpaf.drivers import rabbitmq
++except ImportError:
++    rabbitmq = None
+ 
+ from oslo_messaging.tests.functional import utils
+ from oslo_messaging.tests import utils as test_utils
