@@ -16,6 +16,7 @@
 #    under the License.
 
 import abc
+import argparse
 import logging
 import uuid
 
@@ -23,6 +24,7 @@ from debtcollector import renames
 from oslo_config import cfg
 from oslo_utils import timeutils
 import six
+from stevedore import extension
 from stevedore import named
 
 from oslo_messaging._i18n import _LE
@@ -56,6 +58,49 @@ _notifier_opts = [
 ]
 
 _LOG = logging.getLogger(__name__)
+
+
+def _send_notification():
+    """Command line tool to send notifications manually."""
+    parser = argparse.ArgumentParser(
+        description='Oslo.messaging notification sending',
+    )
+    parser.add_argument('--config-file',
+                        help='Path to configuration file')
+    parser.add_argument('--transport-url',
+                        help='Transport URL')
+    parser.add_argument('--publisher-id',
+                        help='Publisher ID')
+    parser.add_argument('--event-type',
+                        default="test",
+                        help="Event type")
+    parser.add_argument('--topic',
+                        nargs='*',
+                        help="Topic to send to")
+    parser.add_argument('--priority',
+                        default="info",
+                        choices=("info",
+                                 "audit",
+                                 "warn",
+                                 "error",
+                                 "critical",
+                                 "sample"),
+                        help='Event type')
+    parser.add_argument('--driver',
+                        default="messagingv2",
+                        choices=extension.ExtensionManager(
+                            'oslo.messaging.notify.drivers'
+                        ).names(),
+                        help='Notification driver')
+    parser.add_argument('payload')
+    args = parser.parse_args()
+    conf = cfg.ConfigOpts()
+    conf([],
+         default_config_files=[args.config_file] if args.config_file else None)
+    transport = get_notification_transport(conf, url=args.transport_url)
+    notifier = Notifier(transport, args.publisher_id, topics=args.topic,
+                        driver=args.driver)
+    notifier._notify({}, args.event_type, args.payload, args.priority)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -93,6 +138,31 @@ class Driver(object):
 
 def get_notification_transport(conf, url=None,
                                allowed_remote_exmods=None, aliases=None):
+    """A factory method for Transport objects for notifications.
+
+    This method should be used for notifications, in case notifications are
+    being sent over a different message bus than normal messaging
+    functionality; for example, using a different driver, or with different
+    access permissions.
+
+    If no transport URL is provided, the URL in the notifications section of
+    the config file will be used.  If that URL is also absent, the same
+    transport as specified in the messaging section will be used.
+
+    If a transport URL is provided, then this function works exactly the same
+    as get_transport.
+
+    :param conf: the user configuration
+    :type conf: cfg.ConfigOpts
+    :param url: a transport URL
+    :type url: str or TransportURL
+    :param allowed_remote_exmods: a list of modules which a client using this
+                                  transport will deserialize remote exceptions
+                                  from
+    :type allowed_remote_exmods: list
+    :param aliases: A map of transport alias to transport name
+    :type aliases: dict
+    """
     conf.register_opts(_notifier_opts,
                        group='oslo_messaging_notifications')
     if url is None:
