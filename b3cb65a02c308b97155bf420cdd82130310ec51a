@@ -1,0 +1,9 @@
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Workflow+1: Ken Giusti <kgiusti@gmail.com>
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 21 Sep 2016 14:53:15 +0000
+Reviewed-on: https://review.openstack.org/369033
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
