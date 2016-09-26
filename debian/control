@@ -93,8 +93,8 @@ Build-Depends-Indep: bandit,
                      subunit,
                      testrepository,
 Standards-Version: 3.9.8
-Vcs-Browser: https://anonscm.debian.org/cgit/openstack/python-oslo.messaging.git/
-Vcs-Git: https://anonscm.debian.org/git/openstack/python-oslo.messaging.git
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-python-oslo.messaging?h=debian%2Fnewton
+Vcs-Git: https://git.openstack.org/openstack/deb-python-oslo.messaging -b debian/newton
 Homepage: https://github.com/openstack/oslo.messaging
 
 Package: python-oslo.messaging
