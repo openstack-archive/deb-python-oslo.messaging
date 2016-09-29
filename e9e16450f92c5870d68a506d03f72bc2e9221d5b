@@ -1,0 +1,9 @@
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 29 Sep 2016 09:55:19 +0000
+Reviewed-on: https://review.openstack.org/372810
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
