@@ -1,0 +1,12 @@
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Code-Review+1: gordon chung <gord@live.ca>
+Code-Review+1: John Eckersberg <jeckersb@redhat.com>
+Code-Review+1: Andy Smith <ansmith@redhat.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 16:50:23 +0000
+Reviewed-on: https://review.openstack.org/381300
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
