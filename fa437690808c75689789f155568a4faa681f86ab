@@ -1,0 +1,9 @@
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Workflow+1: Ken Giusti <kgiusti@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 10 Oct 2016 16:44:09 +0000
+Reviewed-on: https://review.openstack.org/384015
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
