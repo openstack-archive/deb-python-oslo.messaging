@@ -1,0 +1,11 @@
+Code-Review+1: David Moreau Simard <dms@redhat.com>
+Code-Review+1: Mohammed Naser <mnaser@vexxhost.com>
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Workflow+1: Gevorg Davoian <gdavoian@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 27 Oct 2016 10:40:26 +0000
+Reviewed-on: https://review.openstack.org/389190
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/mitaka
