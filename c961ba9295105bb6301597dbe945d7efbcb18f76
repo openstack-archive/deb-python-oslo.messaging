@@ -1,0 +1,11 @@
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Code-Review+1: John Eckersberg <jeckersb@redhat.com>
+Code-Review+1: venkatamahesh <Venkata.Kotha@infinite.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 07 Nov 2016 16:46:46 +0000
+Reviewed-on: https://review.openstack.org/394110
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
