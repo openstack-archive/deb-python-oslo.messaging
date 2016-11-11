@@ -1,0 +1,9 @@
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 11 Nov 2016 10:35:07 +0000
+Reviewed-on: https://review.openstack.org/396299
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/newton
