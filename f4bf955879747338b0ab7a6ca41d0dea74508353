@@ -1,0 +1,9 @@
+Code-Review+2: Flavio Percoco <fpercoco@redhat.com>
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Workflow+1: Ken Giusti <kgiusti@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 11 Nov 2016 03:12:27 +0000
+Reviewed-on: https://review.openstack.org/394963
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/newton
