@@ -1,0 +1,8 @@
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Workflow+1: Gevorg Davoian <gdavoian@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 18 Nov 2016 11:15:25 +0000
+Reviewed-on: https://review.openstack.org/392380
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
