@@ -1,0 +1,9 @@
+Code-Review+2: Victor Stinner <vstinner@redhat.com>
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Workflow+1: Gevorg Davoian <gdavoian@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 23 Nov 2016 11:50:05 +0000
+Reviewed-on: https://review.openstack.org/401055
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
