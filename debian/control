@@ -6,7 +6,7 @@ Uploaders: Thomas Goirand <zigo@debian.org>,
            James Page <james.page@ubuntu.com>,
            Corey Bryant <corey.bryant@canonical.com>,
            David Della Vecchia <ddv@canonical.com>,
-Build-Depends: debhelper (>= 9),
+Build-Depends: debhelper (>= 10),
                dh-python,
                dh-systemd,
                openstack-pkg-tools (>= 52~),
@@ -180,6 +180,7 @@ Description: oslo messaging library - Python 3.x
 Package: oslo-messaging-zmq-receiver
 Architecture: all
 Depends: adduser,
+         lsb-base,
          python-oslo.messaging (= ${binary:Version}) | python3-oslo.messaging (= ${binary:Version}),
          python-zmq | python3-zmq,
          ${misc:Depends},
