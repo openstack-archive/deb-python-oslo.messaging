@@ -1,0 +1,9 @@
+Code-Review+2: Joshua Harlow <jxharlow@godaddy.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 24 Nov 2016 23:48:56 +0000
+Reviewed-on: https://review.openstack.org/394721
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
