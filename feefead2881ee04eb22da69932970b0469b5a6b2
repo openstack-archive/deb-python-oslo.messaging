@@ -1,0 +1,9 @@
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 28 Nov 2016 16:05:20 +0000
+Reviewed-on: https://review.openstack.org/391933
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
