@@ -1,0 +1,9 @@
+Code-Review+2: Victor Stinner <vstinner@redhat.com>
+Workflow+1: Victor Stinner <vstinner@redhat.com>
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 30 Nov 2016 16:12:23 +0000
+Reviewed-on: https://review.openstack.org/404615
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
