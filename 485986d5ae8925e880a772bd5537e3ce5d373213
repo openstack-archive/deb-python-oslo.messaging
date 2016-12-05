@@ -1,0 +1,10 @@
+Code-Review+2: Joshua Harlow <jxharlow@godaddy.com>
+Code-Review+1: melanie witt <melwittt@gmail.com>
+Code-Review+2: Gevorg Davoian <gdavoian@mirantis.com>
+Workflow+1: Gevorg Davoian <gdavoian@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Dec 2016 18:52:37 +0000
+Reviewed-on: https://review.openstack.org/403924
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
