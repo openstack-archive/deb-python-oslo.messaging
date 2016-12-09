@@ -1,0 +1,10 @@
+Code-Review+1: Hiroaki Kobayashi <kobayashi.hiroaki@lab.ntt.co.jp>
+Code-Review+1: Lianhao Lu <lianhao.lu@intel.com>
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Workflow+1: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Dec 2016 09:11:02 +0000
+Reviewed-on: https://review.openstack.org/408795
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
