@@ -1,0 +1,9 @@
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 04 Jan 2017 13:11:06 +0000
+Reviewed-on: https://review.openstack.org/332105
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master

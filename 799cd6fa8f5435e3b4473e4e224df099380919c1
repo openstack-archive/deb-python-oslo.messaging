@@ -1,0 +1,8 @@
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 04 Jan 2017 13:11:23 +0000
+Reviewed-on: https://review.openstack.org/409155
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
