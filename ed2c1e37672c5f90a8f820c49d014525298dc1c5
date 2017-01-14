@@ -1,0 +1,10 @@
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Code-Review+1: gordon chung <gord@live.ca>
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Workflow+1: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 13 Jan 2017 21:06:10 +0000
+Reviewed-on: https://review.openstack.org/418000
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
