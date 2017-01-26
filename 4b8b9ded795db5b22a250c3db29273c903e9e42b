@@ -1,0 +1,9 @@
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 26 Jan 2017 05:34:14 +0000
+Reviewed-on: https://review.openstack.org/423967
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/ocata
