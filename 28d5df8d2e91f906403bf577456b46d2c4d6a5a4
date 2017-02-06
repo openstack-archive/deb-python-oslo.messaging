@@ -1,0 +1,11 @@
+Code-Review+2: Oleksii Zamiatin <ozamiatin@mirantis.com>
+Code-Review+1: Andy Smith <ansmith@redhat.com>
+Code-Review+1: gordon chung <gord@live.ca>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 04 Feb 2017 20:08:57 +0000
+Reviewed-on: https://review.openstack.org/426792
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/ocata
