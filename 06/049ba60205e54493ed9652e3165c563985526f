@@ -1,0 +1,9 @@
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Workflow+1: Davanum Srinivas (dims) <davanum@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 03 Apr 2017 15:27:28 +0000
+Reviewed-on: https://review.openstack.org/447782
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
