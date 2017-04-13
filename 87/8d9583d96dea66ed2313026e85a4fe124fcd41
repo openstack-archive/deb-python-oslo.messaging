@@ -1,0 +1,10 @@
+Code-Review+2: Davanum Srinivas (dims) <davanum@gmail.com>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Ken Giusti <kgiusti@gmail.com>
+Workflow+1: Ken Giusti <kgiusti@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 13 Apr 2017 14:43:58 +0000
+Reviewed-on: https://review.openstack.org/449541
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
