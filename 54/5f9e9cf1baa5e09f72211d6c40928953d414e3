@@ -1,0 +1,9 @@
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Code-Review+2: Mehdi Abaakouk (sileht) <sileht@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 04 May 2017 08:32:33 +0000
+Reviewed-on: https://review.openstack.org/460422
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/newton
