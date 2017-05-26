@@ -1,0 +1,8 @@
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 26 May 2017 12:05:51 +0000
+Reviewed-on: https://review.openstack.org/468247
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
