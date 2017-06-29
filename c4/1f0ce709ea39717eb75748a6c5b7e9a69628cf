@@ -1,0 +1,9 @@
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 29 Jun 2017 15:05:24 +0000
+Reviewed-on: https://review.openstack.org/466787
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/stable/newton
