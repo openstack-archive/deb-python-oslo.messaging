@@ -1,0 +1,9 @@
+Code-Review+2: Doug Hellmann <doug@doughellmann.com>
+Code-Review+2: ChangBo Guo(gcb) <glongwave@gmail.com>
+Workflow+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 10 Jul 2017 03:54:23 +0000
+Reviewed-on: https://review.openstack.org/479914
+Project: openstack/deb-python-oslo.messaging
+Branch: refs/heads/master
