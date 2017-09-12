@@ -1,8 +1,0 @@
----
-features:
-  - |
-    | Retry support for oslo_messaging_notifications driver
-    | Configuration param 'retry' is added. Default is -1, indefinite
-
-    * *retry* (default=-1)
-
